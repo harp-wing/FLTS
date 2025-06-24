@@ -69,7 +69,7 @@ def train(model: torch.nn.Module,
             else:
                 exogenous = None
             optimizer.zero_grad()
-            y_pred = model(x, exogenous, device, y_hist)
+            y_pred = model(x, exogenous, device=device)
             loss = criterion(y_pred, y)
             if fedprox_mu > 0.:
                 fedprox_reg = 0.
@@ -158,7 +158,7 @@ def test(model, data, criterion, device="cuda") -> Union[
                 exogenous = exogenous.to(device)
             else:
                 exogenous = None
-            out = model(x, exogenous, device, y_hist)
+            out = model(x, exogenous, device=device)
             if criterion is not None:
                 loss += criterion(out, y).item()
             y_true.extend(y)

@@ -16,7 +16,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler
 from torch.utils.data import TensorDataset, DataLoader
 
-from ml.utils.logger import log
+from shared.logger import log
 
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
@@ -149,27 +149,28 @@ def generate_time_lags(df: pd.DataFrame,
     columns = list(df.columns)
     dfs = []
 
-    for area in df[identifier].unique():
-        df_area = df.loc[df[identifier] == area]
-        df_n = df_area.copy()
-
+    if identifier is not None:
+        for area in df[identifier].unique():
+            df_area = df.loc[df[identifier] == area]
+            df_n = df_area.copy()
+            ...
+            dfs.append(df_n)
+        df = pd.concat(dfs, ignore_index=False)
+    else:
+        df_n = df.copy()
         for n in range(1, n_lags + 1):
             for col in columns:
-                if col == "time" or col == identifier:
+                if col == "time":
                     continue
-                df_n[f"{col}_lag-{n}"] = df_n[col].shift(n).replace(np.NaN, 0).astype("float64")
+                df_n[f"{col}_lag-{n}"] = df_n[col].shift(n).replace(np.nan, 0).astype("float64")
         df_n = df_n.iloc[n_lags:]
-
-        dfs.append(df_n)
-    df = pd.concat(dfs, ignore_index=False)
+        df = df_n
 
     if is_y:
         df = df[columns]
     else:
-        if identifier in columns:
-            columns.remove(identifier)
         df = df.loc[:, ~df.columns.isin(columns)]
-        df = df[df.columns[::-1]]  # reverse order, e.g. lag-1, lag-2 to lag-2, lag-1.
+        df = df[df.columns[::-1]]
 
     return df
 
@@ -283,16 +284,15 @@ def to_cyclical(df: pd.DataFrame,
 def to_timeseries_rep(x: Union[np.ndarray, Dict[Union[str, int], np.ndarray]],
                       num_lags: int = 10,
                       num_features: int = 11) -> Union[np.ndarray, Dict[Union[str, int], np.ndarray]]:
-    """Transforms a dataframe to timeseries representation."""
+    """Transforms a numpy array or dict of arrays to (batch, lags, features) format."""
     if isinstance(x, np.ndarray):
-        x_reshaped = x.reshape((len(x), num_lags, num_features, -1))
-        return x_reshaped
+        return x.reshape((len(x), num_lags, num_features))  # ✅ 3D
     else:
-        xs_reshaped = dict()
-        for cid in x:
-            tmp_x = x[cid]
-            xs_reshaped[cid] = tmp_x.reshape((len(tmp_x), num_lags, num_features, -1))
-        return xs_reshaped
+        reshaped = {}
+        for k, v in x.items():
+            reshaped[k] = v.reshape((len(v), num_lags, num_features))  # ✅ 3D
+        return reshaped
+
 
 
 def remove_identifiers(X_train: pd.DataFrame,
@@ -302,12 +302,14 @@ def remove_identifiers(X_train: pd.DataFrame,
                        identifier: str = "District") -> Union[
     Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame], Tuple[pd.DataFrame, pd.DataFrame]]:
     """Removes a specified column which describes an area/client, e.g., id."""
-    X_train = X_train.drop([identifier], axis=1)
-    y_train = y_train.drop([identifier], axis=1)
+    if identifier is not None:
+        X_train = X_train.drop([identifier], axis=1)
+        y_train = y_train.drop([identifier], axis=1)
 
     if X_val is not None and y_val is not None:
-        X_val = X_val.drop([identifier], axis=1)
-        y_val = y_val.drop([identifier], axis=1)
+        if identifier is not None:
+            X_val = X_val.drop([identifier], axis=1)
+            y_val = y_val.drop([identifier], axis=1)
         return X_train, y_train, X_val, y_val
     return X_train, y_train
 
@@ -410,8 +412,9 @@ def to_Xy(train_data: pd.DataFrame,
     """Generates the features and targets for the training and validation sets
      or the features and targets for the testing set."""
     targets = copy.deepcopy(targets)
-    if identifier not in targets:
+    if identifier is not None and identifier not in targets:
         targets.append(identifier)
+
 
     y_train = train_data[targets]
 
@@ -505,7 +508,7 @@ def get_exogenous_data_by_area(exogenous_data_train: pd.DataFrame,
 def to_torch_dataset(X: np.ndarray, y: np.ndarray,
                      num_lags: int = 10,
                      num_features: int = 11,
-                     indices: List[int] = [8, 3, 1, 10, 9],
+                     indices: List[int] = [0,1],
                      batch_size: int = 32,
                      exogenous_data: Optional[np.ndarray] = None,
                      shuffle: bool = False) -> torch.utils.data.DataLoader:
@@ -533,7 +536,7 @@ class TimeSeriesDataset(torch.utils.data.Dataset):
     def __init__(self, X: np.ndarray, y: np.ndarray,
                  num_lags: int = 10,
                  num_features: int = 11,
-                 indices: List[int] = [8, 3, 2, 10, 9],
+                 indices: List[int] = [0, 1],
                  exogenous: Optional[np.ndarray] = None):
         if exogenous is not None:
             assert X.size(0) == y.size(0) == exogenous.size(0), "Size mismatch between tensors"

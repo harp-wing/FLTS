@@ -5,13 +5,13 @@ Helper functions during training.
 import copy
 import math
 from logging import INFO
-from typing import Union, List, Dict, Tuple
+from typing import Union, List, Dict, Tuple, Optional
 
 import numpy as np
 import torch
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-from ml.utils.logger import log
+from shared.logger import log
 
 
 def get_optim(model,
@@ -65,41 +65,43 @@ def log_metrics(y_true: np.ndarray,
     return res
 
 
-def accumulate_metric(y_true: Union[np.ndarray, torch.tensor],
-                      y_pred: Union[np.ndarray, torch.tensor],
+def accumulate_metric(y_true: Union[np.ndarray, torch.Tensor],
+                      y_pred: Union[np.ndarray, torch.Tensor],
                       log_per_output: bool = False,
-                      dims: List[int] = [3, 4],
+                      dims: Optional[List[int]] = None,
                       return_all=False) -> Union[
     Tuple[float, float, float, float, float],
     Tuple[float, float, float, float, float, Union[None, Dict[int, List[float]]]]]:
-    """Regression metrics. Note that the dims parameter is only used for the targets of interest to calculate the
-    NRMSE metric."""
+    """Computes standard regression metrics (MSE, RMSE, MAE, R2, NRMSE).
+    Automatically computes NRMSE for all output dimensions if dims is None.
+    """
+
     if not isinstance(y_true, np.ndarray):
         y_true = y_true.cpu().numpy()
     if not isinstance(y_pred, np.ndarray):
         y_pred = y_pred.cpu().numpy()
+
     mse = mean_squared_error(y_true, y_pred)
     rmse = math.sqrt(mse)
     mae = mean_absolute_error(y_true, y_pred)
     r2 = r2_score(y_true, y_pred)
 
-    y_true_first_dim = y_true[:, dims[0]]
-    y_pred_first_dim = y_pred[:, dims[0]]
+    # Default: use all output dimensions
+    if dims is None:
+        dims = list(range(y_true.shape[1]))
 
-    rmse_first_dim = math.sqrt(mean_squared_error(y_true_first_dim, y_pred_first_dim))
-    nrmse_first_dim = rmse_first_dim / np.mean(y_true_first_dim)
+    # NRMSE: average over selected dimensions
+    nrmse_list = []
+    for i in dims:
+        y_true_dim = y_true[:, i]
+        y_pred_dim = y_pred[:, i]
+        rmse_dim = math.sqrt(mean_squared_error(y_true_dim, y_pred_dim))
+        mean_true = np.mean(y_true_dim)
+        if mean_true != 0:
+            nrmse_dim = rmse_dim / mean_true
+            nrmse_list.append(nrmse_dim)
 
-    if y_true.shape[1] >= 2:
-        nrmses = 0
-        for i in range(1, len(dims)):
-            y_true_dim = y_true[:, dims[i]]
-            y_pred_dim = y_pred[:, dims[i]]
-            rmse_dim = math.sqrt(mean_squared_error(y_true_dim, y_pred_dim))
-            nrmse_dim = rmse_dim / np.mean(y_true_dim)
-            nrmses += nrmse_dim
-        nrmse = (nrmse_first_dim + nrmses) / len(dims)
-    else:
-        nrmse = nrmse_first_dim
+    nrmse = np.mean(nrmse_list) if nrmse_list else 0.0
 
     if log_per_output:
         res = log_metrics(y_true, y_pred)
@@ -117,7 +119,7 @@ class EarlyStopping:
         self.counter = 0
         self.best_score = None
         self.early_stop = False
-        self.val_loss_min = np.Inf
+        self.val_loss_min = np.inf
         self.delta = delta
         self.trace = trace
         self.trace_func = trace_func
