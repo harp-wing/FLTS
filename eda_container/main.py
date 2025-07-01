@@ -54,6 +54,7 @@ def table_style(df):
     return table_html
 
 table = table_style(stat_analyze(df))
+nan_eval = eval_nans(df)
 
 
 # Create the FastAPI app instance
@@ -124,7 +125,7 @@ def index():
         img_tags += f"""
             <h2>{title}</h2>
             <p>Available at: <code>/plot/{slug}.png</code></p>
-            <img src="/plot/{slug}.png" alt="Plot of {title}" style="border: 1px solid #ccc; max-width: 800px;">
+            <img src="/plot/{slug}.png" alt="Plot of {title}" style="border: 1px solid #ccc; max-width: 1000px;">
             <hr>
         """
 
@@ -140,6 +141,8 @@ def index():
         <body>
             <h1>Statistics Dashboard</h1>
             <p>Various properties of the dataset are visualized below.</p>
+            <h2>Summary of Data Quality</h2>
+            {nan_eval}
             <h2>Feature Statistics</h2>
             {table}
             {img_tags}

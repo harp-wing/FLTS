@@ -10,6 +10,35 @@ from sklearn.decomposition import PCA
 from scipy.stats import gmean
 from statsmodels.graphics.tsaplots import plot_pacf
 
+def eval_nans(df: pd.DataFrame, preformat: bool=True) -> str:
+    if preformat:
+        return_str = '<p>'
+    else:
+        return_str = '\n'
+    
+    nulls = df.isna()
+    missing_entries = nulls.sum().sum()
+    rows_with_missing = nulls.any(axis=1).sum() 
+    # nan_counts = nulls.groupby(nulls.ne(nulls.shift()).cumsum()).sum()
+    # return_str += f'Consecutive NaNs in each column:{nan_counts}\n'
+    return_str += f'Total rows with missing entries: {rows_with_missing}\n'
+    return_str += f'Total missing entries in the dataset: {missing_entries}\n'
+
+    total_entries = df.size
+    total_rows = df.shape[0]
+    percentage_missing = (missing_entries / total_entries) * 100
+    percentage_rows_missing = (rows_with_missing / total_rows) * 100
+    return_str += f'Percentage of rows with missing entries: {percentage_rows_missing:.2f}%\n'
+    return_str += f'Percentage of missing entries: {percentage_missing:.2f}%'
+
+    if preformat:
+        return_str = return_str.replace('\n', '<br>')
+        return_str += '</p>'
+    else:
+        return_str = '\n'
+
+    return return_str
+
 def stat_analyze(df):
     df_features = df.copy().select_dtypes(include=np.number).dropna()
     row_labels = ['mean', 'stdev', 'median', 'mode', 'gmean', 'variance', 'skewness', 'kurtosis']
@@ -27,7 +56,6 @@ def stat_analyze(df):
     df_stats.loc['kurtosis'] = df_features.kurt()
 
     return df_stats
-
 
 def corrplot(df):
     """
@@ -81,7 +109,6 @@ def corrplot(df):
             ax.set_yticks([])
 
     return fig
-
 
 def pca_plot(df: pd.DataFrame, var_threshold=0.95):
     # Select only numeric columns for PCA
