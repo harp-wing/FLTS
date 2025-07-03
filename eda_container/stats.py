@@ -46,6 +46,7 @@ def stat_analyze(df):
     df_stats.index.name = 'statistic'
     df_stats.columns.name = 'feature'
 
+    # Fill the stats dataframe with corresponding features
     df_stats.loc['mean'] = df_features.mean()
     df_stats.loc['stdev'] = df_features.std()
     df_stats.loc['median'] = df_features.median()

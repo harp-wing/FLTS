@@ -85,7 +85,7 @@ def scale_data(df: pd.DataFrame, scale: str='StandardScaler') -> pd.DataFrame:
 
     return df_return
 
-def generate_lags(df: pd.DataFrame, n_lags: int, step: int) -> pd.DataFrame:
+def generate_lags(df: pd.DataFrame, n_lags: int, step: int=1) -> pd.DataFrame:
     '''
     Generates duplicate n_lags duplicate features that are lagged by step
     '''

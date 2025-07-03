@@ -9,17 +9,20 @@ import matplotlib
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
+# Import functions from a separate file
 from stats import *
 
+# Path to dataset depending on where the volume is mounted for the container
 DATA_PATH = "/app/data/dataset"
 
-# Non-interactive backend for headless environments
+# Non-interactive backend for headless environment
 matplotlib.use('Agg')
 
 # Load the dataset
 file_path = os.path.join(DATA_PATH, 'ElBorn.csv')
 df = pd.read_csv(file_path)
 
+# Styles the statistics dataframe into a presentable table
 def table_style(df):
     """
     Apply styling to df_stats for better readability.
@@ -53,6 +56,7 @@ def table_style(df):
     
     return table_html
 
+# Function calls to gather non-plot data to present
 table = table_style(stat_analyze(df))
 nan_eval = eval_nans(df)
 
@@ -63,7 +67,7 @@ app = FastAPI(
     description="An API to dynamically generate and serve Matplotlib plots."
 )
 
-# --- A dictionary to map plot names to their creation functions ---
+# A dictionary to map plot names to their creation functions
 PLOTS = {
     'distance_correlation': {
         'title':'Distance Correlation Pair Plot',
@@ -80,7 +84,7 @@ PLOTS = {
 }
 
 
-# --- A single, dynamic endpoint for generating plots ---
+# A dynamic endpoint for generating plots
 @app.get("/plot/{plot_slug}.png")
 def plot_png(plot_slug: str):
     """
@@ -92,7 +96,7 @@ def plot_png(plot_slug: str):
     if not plot_info:
         raise HTTPException(status_code=404, detail="Plot not found")
 
-    # Look up the plot generator function from our dictionary
+    # Look up the plot generator function from the dictionary
     generator_func = plot_info['generator']
 
     try:
@@ -111,7 +115,7 @@ def plot_png(plot_slug: str):
     # Return the image as a StreamingResponse
     return StreamingResponse(io.BytesIO(image_bytes), media_type="image/png")
 
-# --- Main HTML page to display plots ---
+# Main HTML page to display plots
 @app.get("/", response_class=HTMLResponse)
 def index():
     """
