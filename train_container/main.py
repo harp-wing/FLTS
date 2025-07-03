@@ -10,10 +10,13 @@ from shared.data_utils import (
 )
 from train import train_model
 import torch
+import time
+
+start = time.time()
 
 def run_training():
     # Load raw data
-    df = pd.read_csv("data/ElBorn.csv", parse_dates=["time"])
+    df = pd.read_csv("data/full_dataset.csv", parse_dates=["time"])
     
     print("Raw DataFrame shape:", df.shape)
     print("Columns:", df.columns.tolist())
@@ -80,9 +83,10 @@ def run_training():
     model = train_model(X_np, y_np, X_np, y_np, config)
 
     # Save
-    os.makedirs("../outputs/models", exist_ok=True)
-    torch.save(model.state_dict(), "../outputs/models/lstm.pt")
+    os.makedirs("outputs/models", exist_ok=True)
+    torch.save(model.state_dict(), "outputs/models/lstm.pt")
     print("Model saved to outputs/models/lstm.pt")
 
 if __name__ == "__main__":
     run_training()
+    print(f"Training completed in {time.time() - start:.2f} seconds")

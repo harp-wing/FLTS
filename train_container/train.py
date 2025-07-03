@@ -1,12 +1,9 @@
 # train_container/train.py
 
 import torch
-from train_container.m1 import LSTM
+from m1 import LSTM
 from shared.train_utils import train
 from shared.data_utils import to_torch_dataset
-import time
-
-start = time.time()
 
 def prepare_data_loaders(X_train_np, y_train_np, X_val_np, y_val_np, num_lags=10, num_features=11, batch_size=64):
     """
@@ -56,4 +53,4 @@ def train_model(X_train_np, y_train_np, X_val_np, y_val_np, config):
 
     return trained_model
 
-print(f"Training completed in {time.time() - start:.2f} seconds")
+
