@@ -141,6 +141,7 @@ def generate_time_lags(df: pd.DataFrame,
                        n_lags: int = 10,
                        identifier: str = "District",
                        is_y: bool = False) -> pd.DataFrame:
+<<<<<<< HEAD
     """
     Generates time lag features for numeric columns only.
     If is_y is True, keeps original measurements only; otherwise,
@@ -165,10 +166,34 @@ def generate_time_lags(df: pd.DataFrame,
         df_n = df.copy()
         for n in range(1, n_lags + 1):
             for col in numeric_cols:
+=======
+    """Transforms a dataframe to time lags using the shift method.
+    If the shifting operation concerns the targets, then lags removal is applied, i.e., only the measurements that
+    we try to predict are kept in the dataframe. If the shifting operation concerns the previous time steps (our actual
+    input), then measurements removal is applied, i.e., the measurements in the first lag are being removed since they
+    are the targets that we try to predict."""
+    columns = list(df.columns)
+    dfs = []
+
+    if identifier is not None:
+        for area in df[identifier].unique():
+            df_area = df.loc[df[identifier] == area]
+            df_n = df_area.copy()
+            ...
+            dfs.append(df_n)
+        df = pd.concat(dfs, ignore_index=False)
+    else:
+        df_n = df.copy()
+        for n in range(1, n_lags + 1):
+            for col in columns:
+                if col == "time":
+                    continue
+>>>>>>> f9fd84bac5784d63202d7399352e2aa06b089df2
                 df_n[f"{col}_lag-{n}"] = df_n[col].shift(n).replace(np.nan, 0).astype("float64")
         df_n = df_n.iloc[n_lags:]
         df = df_n
 
+<<<<<<< HEAD
     # Decide which columns to keep based on whether this is target (y) or input (X)
     if is_y:
         # Keep original numeric columns only as targets
@@ -177,11 +202,21 @@ def generate_time_lags(df: pd.DataFrame,
         # Keep only new lagged features (not original columns)
         lag_cols = [c for c in df.columns if any(f"_lag-" in c for n in range(1, n_lags + 1))]
         df = df[lag_cols[::-1]]  # Reverse columns order for consistency
+=======
+    if is_y:
+        df = df[columns]
+    else:
+        df = df.loc[:, ~df.columns.isin(columns)]
+        df = df[df.columns[::-1]]
+>>>>>>> f9fd84bac5784d63202d7399352e2aa06b089df2
 
     return df
 
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> f9fd84bac5784d63202d7399352e2aa06b089df2
 def time_to_feature(df: pd.DataFrame,
                     use_time_features: bool = True,
                     identifier: str = "District") -> Union[pd.DataFrame, None]:
