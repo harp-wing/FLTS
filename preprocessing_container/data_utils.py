@@ -1,8 +1,8 @@
-import numpy as np
-import pandas as pd
+import numpy as np # type: ignore
+import pandas as pd # type: ignore
 from typing import Optional
-from sklearn.impute import KNNImputer
-from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler
+from sklearn.impute import KNNImputer # type: ignore
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler # type: ignore
 
 def read_data(data_path: str, filter: Optional[str] = None) -> pd.DataFrame:
     '''
@@ -137,10 +137,11 @@ def check_uniform(df: pd.DataFrame) -> pd.Timedelta:
     count_most_common = diff_counts.loc[most_common_frequency]
     percentage_most_common = (count_most_common / total_observations) * 100
         
-    print(f"Most common frequency accounts for {percentage_most_common:.2f}% of the time steps.")
     if percentage_most_common < 75:
+        print(f"Most common frequency accounts for {percentage_most_common:.2f}% of the time steps.")
         print('Warning: sampling frequency is highly irregular. Resampling is strongly recommended')
     elif percentage_most_common < 90:
+        print(f"Most common frequency accounts for {percentage_most_common:.2f}% of the time steps.")
         print('Warning: sampling frequency is irregular. Resampling is recommended')
 
     return most_common_frequency

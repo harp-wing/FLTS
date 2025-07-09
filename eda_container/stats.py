@@ -1,14 +1,14 @@
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-from matplotlib.patches import Rectangle
-import seaborn as sns
-import dcor
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
-from scipy.stats import gmean
-from statsmodels.graphics.tsaplots import plot_pacf
+import numpy as np                                      # type: ignore
+import pandas as pd                                     # type: ignore
+import matplotlib.pyplot as plt                         # type: ignore
+import matplotlib.colors as mcolors                     # type: ignore
+from matplotlib.patches import Rectangle                # type: ignore
+import seaborn as sns                                   # type: ignore
+import dcor                                             # type: ignore
+from sklearn.preprocessing import StandardScaler        # type: ignore
+from sklearn.decomposition import PCA                   # type: ignore
+from scipy.stats import gmean                           # type: ignore
+from statsmodels.graphics.tsaplots import plot_pacf     # type: ignore
 
 def eval_nans(df: pd.DataFrame, preformat: bool=True) -> str:
     if preformat:
@@ -41,7 +41,7 @@ def eval_nans(df: pd.DataFrame, preformat: bool=True) -> str:
 
 def stat_analyze(df):
     df_features = df.copy().select_dtypes(include=np.number).dropna()
-    row_labels = ['mean', 'stdev', 'median', 'mode', 'gmean', 'variance', 'skewness', 'kurtosis']
+    row_labels = ['mean', 'stdev', 'median', 'mode', 'min', 'max' 'gmean', 'variance', 'skewness', 'kurtosis']
     df_stats = pd.DataFrame(index=row_labels, columns=df_features.columns)
     df_stats.index.name = 'statistic'
     df_stats.columns.name = 'feature'
@@ -51,6 +51,8 @@ def stat_analyze(df):
     df_stats.loc['stdev'] = df_features.std()
     df_stats.loc['median'] = df_features.median()
     df_stats.loc['mode'] = df_features.mode().iloc[0]
+    df_stats.loc['min'] = df_features.min()
+    df_stats.loc['max'] = df_features.max()
     df_stats.loc['gmean'] = df_features.apply(gmean)
     df_stats.loc['variance'] = df_features.var()
     df_stats.loc['skewness'] = df_features.skew()

@@ -1,10 +1,10 @@
 # eval_container/metrics.py
 
-import numpy as np
-import matplotlib.pyplot as plt
+import numpy as np # type: ignore
+import matplotlib.pyplot as plt # type: ignore
 import json
 import os
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score # type: ignore
 
 def compute_metrics(y_true, y_pred):
     metrics = {
@@ -30,3 +30,14 @@ def plot_predictions(y_true, y_pred, path="outputs/metrics/prediction_plot.png")
     plt.savefig(path)
     plt.close()
     print(f"📈 Plot saved to {path}")
+
+def test_plot():
+    """Generates a random scatter plot."""
+    title = "A Scatter Plot"
+    fig, ax = plt.subplots()
+    x = np.random.rand(50)
+    y = np.random.rand(50)
+    ax.scatter(x, y)
+    ax.set_title(title)
+
+    return fig, title

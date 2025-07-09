@@ -5,11 +5,6 @@ FROM python:${PYTHON_VERSION}-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-ENV MPLCONFIGDIR=/app/.cache/matplotlib
-
-# --- NEW: Install gosu for privilege dropping ---
-# We run as root to install packages
-RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -18,8 +13,9 @@ ARG UID=10001
 RUN adduser \
     --disabled-password \
     --gecos "" \
-    --home "/home/appuser" \
-    --shell "/bin/bash" \
+    --home "/nonexistent" \
+    --shell "/sbin/nologin" \
+    --no-create-home \
     --uid "${UID}" \
     appuser
 
@@ -28,19 +24,17 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=bind,source=requirements.txt,target=requirements.txt \
     python -m pip install -r requirements.txt
 
-# Copy the application code.
-COPY . .
-
 # Pre-create the cache directory and set ownership.
-RUN mkdir -p /app/.cache/matplotlib && chown -R appuser:appuser /app
+RUN mkdir -p /app/.cache/matplotlib && \
+    chown -R appuser:appuser /app/.cache
 
-# Add and configure the entrypoint script
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-ENTRYPOINT ["entrypoint.sh"]
+# Give matplotlib and dcor cache directories they can write to
+ENV MPLCONFIGDIR=/app/.cache/matplotlib
+ENV NUMBA_CACHE_DIR=/app/.cache/dcor
 
-# --- REMOVED: The USER instruction is no longer needed here ---
-# USER appuser
+USER appuser
+
+COPY . .
 
 # Expose the port.
 EXPOSE 8000

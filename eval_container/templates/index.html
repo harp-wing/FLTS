@@ -1,0 +1,25 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- The title is now passed from the Python code -->
+    <title>{{ title }}</title>
+    <style>
+        body { font-family: sans-serif; }
+        .plot-container { margin-bottom: 2rem; border-bottom: 2px solid #eee; padding-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <h1>Here are your asynchronously generated plots:</h1>
+
+    {% for plot in plots %}
+    <div class="plot-container">
+        <h2>{{ plot.title }}</h2>
+        <img src="data:image/png;base64,{{ plot.data }}" alt="{{ plot.title }}">
+    </div>
+    {% endfor %}
+</body>
+</head>
+</html>
