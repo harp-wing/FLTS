@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  minio:
+    image: minio/minio
+    container_name: minio_container
+    command: ["server", "--console-address", ":9001", "/data"]
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_storage:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  create-bucket:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      # Mount your local dataset to a temporary path for uploading.
+      - ../dataset:/data-to-upload
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Waiting for MinIO to be ready...';
+      mc alias set localminio http://minio:9000 minioadmin minioadmin;
+      echo 'Creating bucket: dataset';
+      mc mb localminio/dataset --ignore-existing;
+      echo 'Copying files...';
+      mc cp --recursive /data-to-upload/ localminio/dataset;
+      echo 'Setup complete.';
+      "
+  file-puller:
+    build: .
+    container_name: file_puller_service
+    ports:
+      - "8200:8200"
+    environment:
+      - .env
+    depends_on:
+      - minio
+
+volumes:
+  minio_storage:

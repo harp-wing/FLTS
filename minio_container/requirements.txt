@@ -1,0 +1,7 @@
+minio
+fastapi
+uvicorn
+boto3
+python-multipart
+python-dotenv
+pydantic-settings
