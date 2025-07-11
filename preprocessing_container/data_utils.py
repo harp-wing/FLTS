@@ -1,14 +1,54 @@
 import numpy as np # type: ignore
 import pandas as pd # type: ignore
+import io
+import os
 from typing import Optional
 from sklearn.impute import KNNImputer # type: ignore
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler # type: ignore
 
-def read_data(data_path: str, filter: Optional[str] = None) -> pd.DataFrame:
+def read_data(file_input, filter: Optional[str] = None) -> pd.DataFrame:
     '''
     Reads a csv file with optional filtering by identifier
     '''
-    df = pd.read_csv(data_path)
+    try:
+        # Check if input is a BytesIO object
+        if isinstance(file_input, io.BytesIO):
+            # Reset position to beginning of stream
+            file_input.seek(0)
+            df = pd.read_csv(file_input)
+        
+        # Check if input is a file path string
+        elif isinstance(file_input, str):
+            if not os.path.exists(file_input):
+                raise FileNotFoundError(f"File not found: {file_input}")
+            df = pd.read_csv(file_input)
+        
+        # Handle other file-like objects
+        else:
+            df = pd.read_csv(file_input)
+        
+    except pd.errors.EmptyDataError:
+        raise ValueError("CSV file is empty")
+    except pd.errors.ParserError as e:
+        raise ValueError(f"Error parsing CSV: {e}")
+    except UnicodeDecodeError:
+        # Try different encodings
+        try:
+            if isinstance(file_input, io.BytesIO):
+                file_input.seek(0)
+                df = pd.read_csv(file_input, encoding='latin-1')
+            else:
+                df = pd.read_csv(file_input, encoding='latin-1')
+            return df
+        except:
+            if isinstance(file_input, io.BytesIO):
+                file_input.seek(0)
+                df = pd.read_csv(file_input, encoding='cp1252')
+            else:
+                df = pd.read_csv(file_input, encoding='cp1252')
+            return df
+    except Exception as e:
+        raise ValueError(f"Error reading CSV data: {e}")
 
     try:
         df['time'] = pd.to_datetime(df['time'])

@@ -1,7 +1,5 @@
-minio
+# requirement.txt
+
 fastapi
+minio
 uvicorn
-boto3
-python-multipart
-python-dotenv
-pydantic-settings

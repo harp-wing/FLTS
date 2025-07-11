@@ -6,7 +6,6 @@ FROM python:${PYTHON_VERSION}-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Set working directory
 WORKDIR /app
 
 # Create a non-privileged user.
@@ -29,7 +28,8 @@ USER appuser
 
 COPY . .
 
-EXPOSE 8200
+# Expose the port.
+EXPOSE 8000
 
-# Default command to run your consumer
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port" "8200" "--reload"]
+# This command is passed to the entrypoint script.
+CMD ["uvicorn", "main:app", "--host=0.0.0.0", "--port=8000"]

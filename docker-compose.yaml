@@ -1,0 +1,58 @@
+# docker-compose.yaml
+
+services:
+  # FastAPI Application Service
+  fastapi-app:
+    build:
+      context: ./minio_container  # Path to the directory containing the Dockerfile
+      dockerfile: Dockerfile
+    container_name: fastapi_service
+    ports:
+      - "8000:8000"  # Map host port 8000 to container port 8000
+    volumes:
+      - ./app:/code  # Mount the app directory for live-reloading during development
+    environment:
+      - ENDPOINT=${ENDPOINT}
+      - ACCESS_KEY=${ACCESS_KEY}
+      - SECRET_KEY=${SECRET_KEY}
+      - BUCKET=${BUCKET}
+    depends_on:
+      - minio
+    networks:
+      - app-network
+
+  # MinIO Service
+  minio:
+    image: minio/minio:latest # Using a specific stable version
+    container_name: minio_storage_service
+    ports:
+      - "9000:9000"  # API port
+      - "9001:9001"  # Console/UI port
+    volumes:
+      - minio_data:/data # Persist data using a Docker volume
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    networks:
+      - app-network
+
+  # Preprocessing Service
+  preprocesser:
+    build: ./preprocessing_container # Builds the image from the 'client' folder
+    environment:
+      # This is the crucial part: The client connects to the 'gateway' service by its name.
+      - GATEWAY_URL=http://gateway:8000
+    depends_on:
+      - fastapi-app # Waits for the gateway service to be up and running
+    networks:
+      - app-network
+
+# Define the network
+networks:
+  app-network:
+    driver: bridge
+
+# Define the volume for MinIO data persistence
+volumes:
+  minio_data:
