@@ -3,12 +3,11 @@
 import os
 import io
 import mimetypes
-from fastapi import FastAPI, UploadFile, File, HTTPException, Path, Depends, Request
-from fastapi.responses import StreamingResponse, JSONResponse
-from minio import Minio
-from minio.error import S3Error
+from fastapi import FastAPI, UploadFile, File, HTTPException, Path, Depends, Request # type: ignore
+from fastapi.responses import StreamingResponse, JSONResponse # type: ignore
+from minio import Minio # type: ignore
+from minio.error import S3Error # type: ignore
 import logging
-import uvicorn
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

@@ -1,26 +1,30 @@
 # eda_container/main.py
-
 import io
 import os
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse, HTMLResponse
-import numpy as np
-import matplotlib
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-
+from fastapi import FastAPI, HTTPException # type: ignore
+from fastapi.responses import StreamingResponse, HTMLResponse # type: ignore
+import numpy as np # type: ignore
+import matplotlib # type: ignore
+from matplotlib.figure import Figure # type: ignore
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas # type: ignore
 # Import functions from a separate file
 from stats import *
-
-# Path to dataset depending on where the volume is mounted for the container
-DATA_PATH = "/app/data/dataset"
+from client_utils import get_file
 
 # Non-interactive backend for headless environment
 matplotlib.use('Agg')
 
+FASTAPI_URL = "http://fastapi-app:8000"
+BUCKET_NAME = "dataset"
+OBJECT_NAME = "PobleSec.csv"
+
 # Load the dataset
-file_path = os.path.join(DATA_PATH, 'ElBorn.csv')
-df = pd.read_csv(file_path)
+file_content = get_file(FASTAPI_URL, BUCKET_NAME, OBJECT_NAME)
+if file_content is not None:
+    df = pd.read_csv(file_content)
+    print("CSV imported successfully")
+else:
+    raise TypeError("File content does not exist")
 
 # Styles the statistics dataframe into a presentable table
 def table_style(df):
@@ -60,6 +64,7 @@ def table_style(df):
 table = table_style(stat_analyze(df))
 nan_eval = eval_nans(df)
 
+print("Statistics calculated successfully")
 
 # Create the FastAPI app instance
 app = FastAPI(
@@ -121,7 +126,7 @@ def index():
     """
     Serves the main HTML page which displays links to the available plots.
     """
-
+    print("Reaching root endpoint")
     # Dynamically build the list of images to display
     img_tags = ""
     for slug, plot_info in PLOTS.items():

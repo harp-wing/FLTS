@@ -37,6 +37,19 @@ services:
     networks:
       - app-network
 
+  # EDA Service
+  data_analyzer:
+    build: ./eda_container # Builds the image from the 'client' folder
+    ports:
+      - "8010:8010"
+    environment:
+      # This is the crucial part: The client connects to the 'gateway' service by its name.
+      - GATEWAY_URL=http://gateway:8000
+    depends_on:
+      - fastapi-app # Waits for the gateway service to be up and running
+    networks:
+      - app-network
+
   # Preprocessing Service
   preprocesser:
     build: ./preprocessing_container # Builds the image from the 'client' folder

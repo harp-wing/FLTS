@@ -1,6 +1,7 @@
 import numpy as np                                      # type: ignore
 import pandas as pd                                     # type: ignore
 import matplotlib.pyplot as plt                         # type: ignore
+import matplotlib.cm as cm                              # type: ignore
 import matplotlib.colors as mcolors                     # type: ignore
 from matplotlib.patches import Rectangle                # type: ignore
 import seaborn as sns                                   # type: ignore
@@ -81,8 +82,8 @@ def corrplot(df):
             if m > n:
                 corr_val = dcor.distance_correlation(df_scaled[row].to_numpy(), df_scaled[col].to_numpy()) # Should return a float in the range [0, 1]
 
-                # Assign a color based on the correlation value 
-                cmap = plt.get_cmap('Greens')
+                cmap = cm.get_cmap('Greens')
+                color = cmap(corr_val)
                 color = cmap(corr_val)
 
                 # Create a colored rectangle with the correlation value
