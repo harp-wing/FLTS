@@ -19,9 +19,16 @@ from metrics import *
 # TRAINING PERFORMANCE METRICS
 # INFERRED DATA
 
+
+supported = ["MLP", "LSTM"] # supported models
+
+# for model in models:
+#     if model in supported:
+#         eval_forecast(inferences[model])
+
+
 # Create an instance of FastAPI
 app = FastAPI()
-
 
 # This will look for a directory named "templates" in the same directory as main.py
 templates = Jinja2Templates(directory="templates")
@@ -73,5 +80,7 @@ async def index(request: Request):
     
     return templates.TemplateResponse(
         "index.html",
-        {"request": request, "plots": plot_results},
+        {"request": request, 
+         "title": "Evaluation Dashboard", 
+         "plots": plot_results},
     )

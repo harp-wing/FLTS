@@ -2,7 +2,7 @@ import numpy as np # type: ignore
 import pandas as pd # type: ignore
 import io
 import os
-from typing import Optional
+from typing import Optional, Any
 from sklearn.impute import KNNImputer # type: ignore
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler # type: ignore
 
@@ -106,7 +106,9 @@ def handle_nans(df: pd.DataFrame, threshold: float = 0.33, window: int = 2, no_d
 
     return df_return
 
-def scale_data(df: pd.DataFrame, scale: str='StandardScaler') -> pd.DataFrame:
+from typing import Any
+
+def scale_data(df: pd.DataFrame, scale: str='StandardScaler') -> tuple[pd.DataFrame, Any]:
     df_return = select_numeric(df)
 
     match scale:
@@ -123,7 +125,7 @@ def scale_data(df: pd.DataFrame, scale: str='StandardScaler') -> pd.DataFrame:
         
     df_return = pd.DataFrame(scaler.fit_transform(df_return), index=df.index, columns=df.columns)
 
-    return df_return
+    return df_return, scaler
 
 def generate_lags(df: pd.DataFrame, n_lags: int, step: int=1) -> pd.DataFrame:
     '''

@@ -11,15 +11,13 @@ services:
       - "8000:8000"  # Map host port 8000 to container port 8000
     volumes:
       - ./app:/code  # Mount the app directory for live-reloading during development
-    environment:
-      - ENDPOINT=${ENDPOINT}
-      - ACCESS_KEY=${ACCESS_KEY}
-      - SECRET_KEY=${SECRET_KEY}
-      - BUCKET=${BUCKET}
+    env_file:
+      - .env.minio
     depends_on:
       - minio
     networks:
       - app-network
+
 
   # MinIO Service
   minio:
@@ -30,12 +28,45 @@ services:
       - "9001:9001"  # Console/UI port
     volumes:
       - minio_data:/data # Persist data using a Docker volume
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+    env_file:
+      - .env.minio
     command: server /data --console-address ":9001"
     networks:
       - app-network
+  
+  # # Superset Service
+  # superset:
+  #   build:
+  #     context: ./superset
+  #   ports:
+  #     - "8088:8088"
+  #   restart: unless-stopped
+  #   volumes:
+  #     - superset_data:/app/superset_home
+  #   entrypoint: ["/app/superset-init.sh"]
+  #   depends_on:
+  #     - db # Add a dependency on your database service if you have one
+
+  # # PostgreSQL DB
+  # db:
+  #   image: postgres:latest
+  #   restart: unless-stopped
+  #   # Set environment variables required for the PostgreSQL container.
+  #   # IMPORTANT: For a real project, use a .env file to keep secrets
+  #   # out of your version control.
+  #   env_file:
+  #     - .env.db
+  #   # Map the container's port 5432 to the host machine's port 5432.
+  #   # This allows you to connect to the database from your local machine
+  #   # using tools like DBeaver or pgAdmin.
+  #   ports:
+  #     - "5432:5432"
+  #   # Define a volume to persist the database data.
+  #   # This links the '/var/lib/postgresql/data' directory inside the container
+  #   # to a named volume 'postgres_data' managed by Docker.
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+
 
   # EDA Service
   data_analyzer:
@@ -50,6 +81,7 @@ services:
     networks:
       - app-network
 
+
   # Preprocessing Service
   preprocesser:
     build: ./preprocessing_container # Builds the image from the 'client' folder
@@ -61,6 +93,21 @@ services:
     networks:
       - app-network
 
+  
+  # Evaluation Service
+  # evaluator:
+  #   build: ./eval_container # Builds the image from the 'client' folder
+  #   ports:
+  #     - "8030:8030"
+  #   environment:
+  #     # This is the crucial part: The client connects to the 'gateway' service by its name.
+  #     - GATEWAY_URL=http://gateway:8000
+  #   depends_on:
+  #     - fastapi-app # Waits for the gateway service to be up and running
+  #   networks:
+  #     - app-network
+
+
 # Define the network
 networks:
   app-network:
@@ -69,3 +116,6 @@ networks:
 # Define the volume for MinIO data persistence
 volumes:
   minio_data:
+  # postgres_data:
+
+  

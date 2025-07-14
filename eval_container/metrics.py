@@ -4,12 +4,12 @@ import numpy as np # type: ignore
 import matplotlib.pyplot as plt # type: ignore
 import json
 import os
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score # type: ignore
+from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score # type: ignore
 
-def compute_metrics(y_true, y_pred):
+def eval_forecast(y_true, y_pred):
     metrics = {
-        "MSE": mean_squared_error(y_true, y_pred),
         "MAE": mean_absolute_error(y_true, y_pred),
+        "RMSE": root_mean_squared_error(y_true, y_pred),
         "R2": r2_score(y_true, y_pred)
     }
     return metrics

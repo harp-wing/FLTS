@@ -42,7 +42,7 @@ def eval_nans(df: pd.DataFrame, preformat: bool=True) -> str:
 
 def stat_analyze(df):
     df_features = df.copy().select_dtypes(include=np.number).dropna()
-    row_labels = ['mean', 'stdev', 'median', 'mode', 'min', 'max' 'gmean', 'variance', 'skewness', 'kurtosis']
+    row_labels = ['mean', 'stdev', 'median', 'mode', 'min', 'max', 'gmean', 'variance', 'skewness', 'kurtosis']
     df_stats = pd.DataFrame(index=row_labels, columns=df_features.columns)
     df_stats.index.name = 'statistic'
     df_stats.columns.name = 'feature'

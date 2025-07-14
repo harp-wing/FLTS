@@ -15,10 +15,10 @@ logger = logging.getLogger(__name__)
 
 # --- MinIO Configuration ---
 # Standardized environment variable names as requested.
-ENDPOINT = os.getenv("ENDPOINT", "minio:9000")
-ACCESS_KEY = os.getenv("ACCESS_KEY", "minioadmin")
-SECRET_KEY = os.getenv("SECRET_KEY", "minioadmin")
-BUCKET = os.getenv("BUCKET", "dataset") # Default bucket for startup check
+ACCESS_KEY = os.getenv("MINIO_ROOT_USER", "minioadmin")
+SECRET_KEY = os.getenv("MINIO_ROOT_PASSWORD", "minioadmin")
+ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
+BUCKET = os.getenv("MINIO_DEFAULT_BUCKET", "dataset") # Default bucket for startup check
 
 app = FastAPI(
     title="MinIO File Gateway",
@@ -99,7 +99,6 @@ def startup_event():
         # We set client to None to indicate failure. The dependency will then raise an error.
         minio_client = None
     
-
 
 @app.post(
     "/upload/{bucket_name}/{object_name:path}",
