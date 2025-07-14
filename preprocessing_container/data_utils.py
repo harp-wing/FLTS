@@ -214,3 +214,10 @@ def time_to_feature(df: pd.DataFrame):
     return df_return
 
 
+def to_Xy(df: pd.DataFrame, targets: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    X_df = df.drop(columns=targets, errors="ignore")
+    y_df = df[targets].copy()
+    return X_df, y_df
+
+def remove_identifiers(df: pd.DataFrame) -> pd.DataFrame:
+    return df.loc[:, ~df.columns.str.lower().str.contains("id")]
