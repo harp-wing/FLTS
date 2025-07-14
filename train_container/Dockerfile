@@ -33,8 +33,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy the application code.
 COPY . .
 
+
 # Pre-create the cache directory and set ownership.
 RUN mkdir -p /app/.cache/matplotlib && chown -R appuser:appuser /app
+RUN apt-get update && apt-get install -y git
 
 # Add and configure the entrypoint script
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

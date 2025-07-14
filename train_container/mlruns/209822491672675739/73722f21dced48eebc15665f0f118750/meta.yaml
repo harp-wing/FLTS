@@ -1,0 +1,14 @@
+artifact_uri: mlflow-artifacts:/209822491672675739/73722f21dced48eebc15665f0f118750/artifacts
+end_time: 1752110434555
+entry_point_name: ''
+experiment_id: '209822491672675739'
+lifecycle_stage: active
+run_id: 73722f21dced48eebc15665f0f118750
+run_name: LSTM
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1752110431059
+status: 3
+tags: []
+user_id: appuser

@@ -4,11 +4,11 @@ services:
   # FastAPI Application Service
   fastapi-app:
     build:
-      context: ./minio_container  # Path to the directory containing the Dockerfile
+      context: ./minio_container
       dockerfile: Dockerfile
     container_name: fastapi_service
     ports:
-      - "8000:8000"  # Map host port 8000 to container port 8000
+      - "8000:8000"
     volumes:
       - ./app:/code  # Mount the app directory for live-reloading during development
     env_file:
@@ -21,11 +21,11 @@ services:
 
   # MinIO Service
   minio:
-    image: minio/minio:latest # Using a specific stable version
+    image: minio/minio:latest
     container_name: minio_storage_service
     ports:
-      - "9000:9000"  # API port
-      - "9001:9001"  # Console/UI port
+      - "9000:9000"
+      - "9001:9001"
     volumes:
       - minio_data:/data # Persist data using a Docker volume
     env_file:
@@ -34,62 +34,90 @@ services:
     networks:
       - app-network
   
-  # # Superset Service
-  # superset:
-  #   build:
-  #     context: ./superset
-  #   ports:
-  #     - "8088:8088"
-  #   restart: unless-stopped
-  #   volumes:
-  #     - superset_data:/app/superset_home
-  #   entrypoint: ["/app/superset-init.sh"]
-  #   depends_on:
-  #     - db # Add a dependency on your database service if you have one
-
-  # # PostgreSQL DB
-  # db:
-  #   image: postgres:latest
-  #   restart: unless-stopped
-  #   # Set environment variables required for the PostgreSQL container.
-  #   # IMPORTANT: For a real project, use a .env file to keep secrets
-  #   # out of your version control.
-  #   env_file:
-  #     - .env.db
-  #   # Map the container's port 5432 to the host machine's port 5432.
-  #   # This allows you to connect to the database from your local machine
-  #   # using tools like DBeaver or pgAdmin.
-  #   ports:
-  #     - "5432:5432"
-  #   # Define a volume to persist the database data.
-  #   # This links the '/var/lib/postgresql/data' directory inside the container
-  #   # to a named volume 'postgres_data' managed by Docker.
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
-
 
   # EDA Service
   data_analyzer:
-    build: ./eda_container # Builds the image from the 'client' folder
+    build: ./eda_container
     ports:
       - "8010:8010"
     environment:
-      # This is the crucial part: The client connects to the 'gateway' service by its name.
-      - GATEWAY_URL=http://gateway:8000
+      - GATEWAY_URL=http://fastapi-app:8000
     depends_on:
-      - fastapi-app # Waits for the gateway service to be up and running
+      - fastapi-app
     networks:
       - app-network
 
 
   # Preprocessing Service
   preprocesser:
-    build: ./preprocessing_container # Builds the image from the 'client' folder
+    build: ./preprocessing_container
     environment:
-      # This is the crucial part: The client connects to the 'gateway' service by its name.
-      - GATEWAY_URL=http://gateway:8000
+      - GATEWAY_URL=http://fastapi-app:8000
     depends_on:
-      - fastapi-app # Waits for the gateway service to be up and running
+      - fastapi-app
+    networks:
+      - app-network
+
+  # 🔄 Postgres for MLflow Metadata
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: mlflow
+      POSTGRES_DB: mlflow
+    ports:
+      - "5432:5432"
+    networks:
+      - app-network
+
+  # 🔁 MLflow Server
+  mlflow:
+    build: ./mlflow_container
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_S3_ENDPOINT_URL=http://fastapi-app:8000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+    depends_on:
+      - postgres
+      - fastapi-app
+    networks:
+      - app-network
+    command: >
+      mlflow server 
+      --backend-store-uri postgresql://mlflow:mlflow@postgres/mlflow 
+      --default-artifact-root s3://mlflow/
+      --host 0.0.0.0 
+      --port 5000
+
+  # 🧠 Training Container
+  train:
+    build: ./train_container
+    depends_on:
+      - mlflow
+    environment:
+      - GATEWAY_URL=http://fastapi-app:8000
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_S3_ENDPOINT_URL=http://fastapi-app:8000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+    networks:
+      - app-network
+
+  # 🔮 Inference Container
+  inference:
+    build: 
+      context: .
+      dockerfile: inference_container/Dockerfile
+    depends_on:
+      - mlflow
+    environment:
+      - GATEWAY_URL=http://fastapi-app:8000
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_S3_ENDPOINT_URL=http://fastapi-app:8000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
     networks:
       - app-network
 
@@ -113,7 +141,6 @@ networks:
   app-network:
     driver: bridge
 
-# Define the volume for MinIO data persistence
 volumes:
   minio_data:
   # postgres_data:
