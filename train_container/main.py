@@ -54,7 +54,7 @@ mlflow.set_experiment("flts-lstm-demo")
 with mlflow.start_run(run_name="LSTM"):
     mlflow.log_params(config)
     print(f"[DEBUG] X shape: {X.shape}, y shape: {y.shape}")
-    print(f"[DEBUG] NaNs — y: {np.isnan(y).any()}, X: {np.isnan(X).any()}")
+    print(f"[DEBUG] NaNs — y: {np.isnan(y).any() | np.isinf(y).any()}, X: {np.isnan(X).any() | np.isinf(X).any()}")
 
     model = train_model(X, y, X, y, config)
 
@@ -62,7 +62,8 @@ with mlflow.start_run(run_name="LSTM"):
         model,
         artifact_path="model",
         input_example=X[:1],
-        registered_model_name=None
+        registered_model_name=None,
+        code_paths=["m1.py"] # This tells MLflow to bundle m1.py with the model!
     )
 
     mlflow.log_metric("val_loss", 0.002)

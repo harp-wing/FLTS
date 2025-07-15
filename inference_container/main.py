@@ -45,18 +45,48 @@ import pandas as pd
 
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://fastapi_service:8000")
 
-# === Pull test data from MinIO ===
-X_test_bytes = get_file(GATEWAY_URL, "dataset", "PobleSec.csv")
-X_test = pd.read_csv(X_test_bytes)
-print(X_test.columns)
+# === Pull data for model prediction from MinIO ===
+input_data_bytes = get_file(GATEWAY_URL, "dataset", "PobleSec.csv")
+input_data = pd.read_csv(input_data_bytes)
 
 # === Load model from MLflow ===
-mlflow.set_tracking_uri("http://mlflow:5000")
-model_uri = "models:/flts-lstm/1"
-model = mlflow.pyfunc.load_model(model_uri)
+experiment_name = "flts-lstm-demo"
+runs_df = mlflow.search_runs(
+    experiment_names=[experiment_name],
+    order_by=["start_time desc"],
+    max_results=1
+)
+# Check if any runs were found
+if runs_df.empty:
+    raise Exception(f"No runs found in experiment '{experiment_name}'.")
+
+# Get the 'run_id' from the first row of the DataFrame.
+run_id = runs_df.loc[0, 'run_id']
+print(f"Found run with ID: {run_id}")
+
+# The artifact path is the folder name used when logging the model.
+artifact_path = "model"
+model_uri = f"runs:/{run_id}/{artifact_path}"
+
+# Load the model
+print(f"Loading model from: {model_uri}")
+try:
+    model = mlflow.pyfunc.load_model(model_uri)
+    print("Model loaded successfully.")
+except Exception as e:
+    print(f"Error loading model: {e}")
+    # Listing artifacts to help debug.
+    print(f"\nListing artifacts for run ID {run_id} to help find the correct path:")
+    try:
+        artifacts = mlflow.artifacts.list_artifacts(run_id=run_id)
+        for artifact in artifacts:
+            print(f"- {artifact.path}")
+    except Exception as list_e:
+        print(f"Could not list artifacts: {list_e}")
+    exit()
 
 # === Predict ===
-y_pred = model.predict(X_test)
+y_pred = model.predict(input_data)
 
 # === Push predictions to MinIO ===
 preds_bytes = io.BytesIO()

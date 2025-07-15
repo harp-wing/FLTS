@@ -1,8 +1,7 @@
 # requirements.txt
 
-numpy
-pandas
+numpy==1.26.4
+pandas==2.3.0
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.2.2+cpu
-boto3
-mlflow==3.1.1
+mlflow[extras]==3.1.1
