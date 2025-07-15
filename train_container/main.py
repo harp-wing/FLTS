@@ -18,16 +18,35 @@ table = pq.read_table(source=parquet_bytes)
 df = table.to_pandas()
 
 # === Split features and targets ===
-X_df = df.drop(columns=["down", "up"])
+X_df = df
 y_df = df[["down", "up"]]
 
 X = X_df.to_numpy().astype(np.float32)
 y = y_df.to_numpy().astype(np.float32)
 
 # === LSTM reshaping ===
-T = 10
-X = np.stack([X[i:i+T] for i in range(len(X) - T + 1)], axis=0)
-y = y[T-1:]
+FORECAST_HORIZON=3982
+T = 5
+y_features = y.shape[1]  # Number of target features (e.g., "down", "up")
+
+# Create sliding window samples
+num_samples = len(X) - T - FORECAST_HORIZON + 1
+
+# Pre-allocate arrays for efficiency
+X_new = np.zeros((num_samples, T, X.shape[1]), dtype=np.float32)
+y_new = np.zeros((num_samples, FORECAST_HORIZON, y_features), dtype=np.float32)
+
+for i in range(num_samples):
+    X_new[i] = X[i : i+T]
+    y_new[i] = y[i+T : i+T+FORECAST_HORIZON]
+
+# Flatten the target's last two dimensions for the MLP head
+# Shape changes from (num_samples, 3982, 2) to (num_samples, 7964)
+y_new_flat = y_new.reshape(num_samples, FORECAST_HORIZON * y_features)
+
+# Update the main variables
+X = X_new
+y = y_new_flat
 
 # Sanity check
 mask = ~np.isnan(y).any(axis=1)
@@ -41,7 +60,7 @@ config = {
     "sequence_length": T,
     "num_lags": T,
     "num_features": X.shape[2],
-    "output_dim": y.shape[1],
+    "output_dim": FORECAST_HORIZON * y_features,
     "epochs": 5,
     "batch_size": 32,
     "lr": 0.001

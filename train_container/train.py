@@ -3,7 +3,7 @@ from m1 import LSTM
 from shared.train_utils import train
 from shared.data_utils import to_torch_dataset
 
-def prepare_data_loaders(X_train_np, y_train_np, X_val_np, y_val_np, num_lags=10, num_features=11, batch_size=64):
+def prepare_data_loaders(X_train_np, y_train_np, X_val_np, y_val_np, num_lags=5, num_features=11, batch_size=64):
     """
     Converts numpy data into PyTorch DataLoader objects.
     """
@@ -26,9 +26,9 @@ def train_model(X_train_np, y_train_np, X_val_np, y_val_np, config):
     Wrapper for training a single LSTM model.
     """
     device = config.get("device", "cpu")
-    num_lags = config.get("num_lags", 10)
+    num_lags = config.get("num_lags", 5)
     num_features = config.get("num_features", X_train_np.shape[2])
-    output_dim = config.get("output_dim", y_train_np.shape[1])
+    output_dim = config.get("output_dim")
     batch_size = config.get("batch_size", 64)
     epochs = config.get("epochs", 50)
     lr = config.get("lr", 0.001)

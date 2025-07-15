@@ -42,13 +42,25 @@ import io
 from client_utils import get_file, post_file
 import os
 import pandas as pd
+import pyarrow.parquet as pq
 
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://fastapi_service:8000")
 INFERENCE_LENGTH=3982
 
 # === Pull data for model prediction from MinIO ===
-input_data_bytes = get_file(GATEWAY_URL, "processed-data", "processed_data.csv")
-input_data = pd.read_csv(input_data_bytes)
+input_data_bytes = get_file(GATEWAY_URL, "processed-data", "processed_data.parquet")
+table = pq.read_table(source=input_data_bytes)
+input_data = table.to_pandas()
+x = input_data.to_numpy().astype(np.float32)
+
+# The model expects an input of shape (batch_size, sequence_length, num_features).
+# From the error, we know the sequence_length (T) is 5.
+# We will use the last 5 data points to make our prediction.
+T = 5
+inference_input = x[-T:]
+
+# Reshape the input from (5, 72) to (1, 5, 72) to represent a single sample.
+inference_input_reshaped = inference_input.reshape(1, T, x.shape[1])
 
 # === Load model from MLflow ===
 experiment_name = "flts-lstm-demo"
@@ -86,8 +98,7 @@ except Exception as e:
         print(f"Could not list artifacts: {list_e}")
     exit()
 
-# === Predict ===
-y_pred = model.predict(input_data)
+y_pred = model.predict(inference_input_reshaped)
 
 # === Push predictions to MinIO ===
 preds_bytes = io.BytesIO()

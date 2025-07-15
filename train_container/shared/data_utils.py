@@ -560,29 +560,8 @@ class TimeSeriesDataset(torch.utils.data.Dataset):
         return self.X.size(0)
 
     def __getitem__(self, index):
-        if index == 0:
-            tmp_X = self.X[index]
-            if len(self.X.shape) < 3:
-                tmp_X = tmp_X.view(self.num_lags, self.num_features, 1)
-            y_hist = []
-            for i, lag in enumerate(tmp_X):
-                if i == 0:
-                    pad = torch.zeros_like(lag[self.indices])
-                    y_hist.append(pad.reshape(1, -1))
-                else:
-                    y_hist.append(tmp_X[i - 1][self.indices].reshape(1, -1))
-            y_hist = torch.cat(y_hist)
-
-        elif index < self.num_lags + 1:
-            last_obs = self.X[index - 1]
-            if len(self.X.shape) < 3:
-                last_obs = last_obs.view(self.num_lags, self.num_features, 1)
-            y_hist = []
-            for i, lag in enumerate(last_obs):
-                y_hist.append(last_obs[i][self.indices].reshape(1, -1))
-            y_hist = torch.cat(y_hist)
-        else:
-            y_hist = self.y[index - self.num_lags - 1: index - 1]
+        # The original complex logic for y_hist is removed.
+        y_hist = []  # Always return an empty list.
 
         if self.exogenous is None:
             return self.X[index], [], y_hist, self.y[index]

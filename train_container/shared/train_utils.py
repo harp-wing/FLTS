@@ -63,7 +63,7 @@ def train(model: torch.nn.Module,
         epoch_loss = []
         for x, exogenous, y_hist, y in train_loader:
             x, y = x.to(device), y.to(device)
-            y_hist = y_hist.to(device)
+            # y_hist = y_hist.to(device)
             if exogenous is not None and len(exogenous) > 0:
                 exogenous = exogenous.to(device)
             else:
@@ -153,7 +153,7 @@ def test(model, data, criterion, device="cuda") -> Union[
     with torch.no_grad():
         for x, exogenous, y_hist, y in data:
             x, y = x.to(device), y.to(device)
-            y_hist = y_hist.to(device)
+            # y_hist = y_hist.to(device)
             if exogenous is not None and len(exogenous) > 0:
                 exogenous = exogenous.to(device)
             else:
