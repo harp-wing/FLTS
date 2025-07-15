@@ -44,9 +44,10 @@ import os
 import pandas as pd
 
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://fastapi_service:8000")
+INFERENCE_LENGTH=3982
 
 # === Pull data for model prediction from MinIO ===
-input_data_bytes = get_file(GATEWAY_URL, "dataset", "PobleSec.csv")
+input_data_bytes = get_file(GATEWAY_URL, "processed-data", "processed_data.csv")
 input_data = pd.read_csv(input_data_bytes)
 
 # === Load model from MLflow ===
