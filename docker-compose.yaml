@@ -136,17 +136,18 @@ services:
 
   
   # Evaluation Service
-  # evaluator:
-  #   build: ./eval_container # Builds the image from the 'client' folder
-  #   ports:
-  #     - "8030:8030"
-  #   environment:
-  #     # This is the crucial part: The client connects to the 'gateway' service by its name.
-  #     - GATEWAY_URL=http://gateway:8000
-  #   depends_on:
-  #     - fastapi-app # Waits for the gateway service to be up and running
-  #   networks:
-  #     - app-network
+  evaluator:
+    build: ./eval_container # Builds the image from the 'client' folder
+    ports:
+      - "8030:8030"
+    environment:
+      # This is the crucial part: The client connects to the 'gateway' service by its name.
+      - GATEWAY_URL=http://gateway:8000
+    depends_on:
+      inference:
+        condition: service_completed_successfully
+    networks:
+      - app-network
 
 
 # Define the network

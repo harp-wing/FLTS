@@ -10,3 +10,4 @@ scikit-learn==1.7.0
 starlette==0.46.2
 requests
 mlflow
+pyarrow==20.0.0

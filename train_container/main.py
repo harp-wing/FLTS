@@ -53,6 +53,14 @@ mask = ~np.isnan(y).any(axis=1)
 X = X[mask]
 y = y[mask]
 
+# === Split into train, test, and validation sets ===
+PERCENT_TRAIN = 0.75
+split_index = int(len(X) * PERCENT_TRAIN)
+X_test = X[:split_index]
+y_test = y[:split_index]
+X_val = X[split_index:]
+y_val = y[split_index:]
+
 # === Config ===
 config = {
     "device": "cpu",

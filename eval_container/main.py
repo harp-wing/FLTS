@@ -11,6 +11,8 @@ from fastapi.templating import Jinja2Templates                                  
 from starlette.concurrency import run_in_threadpool                             # type: ignore
 import numpy as np                                                              # type: ignore
 import pandas as pd                                                             # type: ignore
+import pyarrow.parquet as pq                                                    # type: ignore
+import pyarrow as pa                                                            # type: ignore
 import mlflow                                                                   # type: ignore
 import matplotlib.pyplot as plt                                                 # type: ignore
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas     # type: ignore
@@ -22,13 +24,22 @@ from metrics import *
 # INFERRED DATA
 FASTAPI_URL = "http://fastapi-app:8000"
 BUCKET = "dataset"
-OBJECT_NAME = "PobleSec.csv"
+OBJECT_NAME = "PobleSec_test.csv"
 MLFLOW_TRACKING_URI = "localhost:5000"
 
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
-y_true = get_file(FASTAPI_URL, BUCKET, OBJECT_NAME)
-# y_pred = TBD
+# Pickle stream vs Parquet???
+
+y_true_bytes = get_file(FASTAPI_URL, BUCKET, OBJECT_NAME)
+if isinstance(y_true_bytes, io.BytesIO):
+    df_true = pd.read_csv(y_true_bytes, parse_dates=["time"])
+parquet_bytes = get_file(FASTAPI_URL, "predictions", "LSTM.parquet")
+table = pq.read_table(source=parquet_bytes)
+df_pred = table.to_pandas()
+
+print(df_true)
+print(df_pred)
 
 supported = ["LSTM"] # supported models
 
@@ -71,6 +82,7 @@ def plot_to_base64(func):
 
 # Decorate the metrics plotting functions (Doing it here so the metrics function maintain figure return)
 _test_plot = plot_to_base64(test_plot)
+_plot_predictions = plot_to_base64(plot_predictions)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -80,9 +92,18 @@ async def index(request: Request):
     """
 
     # Adjustable graph generator
-    plot_functions = [
-        _test_plot
-    ]
+    PLOTS = {
+        "down" : {
+            "title": "Comparison of Actual vs Predicted Down",
+            "generator": lambda: _plot_predictions(df_true["time"], df_true["down"], df_pred["down"], "Comparison of Actual vs Predicted Down")
+        },
+        "up" : {
+            "title": "Comparison of Actual vs Predicted Up",
+            "generator": lambda: _plot_predictions(df_true["time"], df_true["up"], df_pred["up"], "Comparison of Actual vs Predicted Up")
+        },
+    }
+
+    plot_functions = [plot_info["generator"] for plot_info in PLOTS.values()]
     
     # create plots in parallel
     tasks = [run_in_threadpool(func) for func in plot_functions] # type: ignore

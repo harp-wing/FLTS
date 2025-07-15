@@ -47,7 +47,7 @@ def train_model(X_train_np, y_train_np, X_val_np, y_val_np, config):
                           lr=lr,
                           criterion="mse",
                           device=device,
-                          early_stopping=True)
+                          early_stopping=False)
 
     return trained_model
 

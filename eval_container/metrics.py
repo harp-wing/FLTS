@@ -20,18 +20,17 @@ def save_metrics(metrics: dict, path="outputs/metrics/metrics.json"):
         json.dump(metrics, f, indent=2)
     print(f"✅ Metrics saved to {path}")
 
-def plot_predictions(x, y_true, y_pred):
+def plot_predictions(x, y_true, y_pred, title):
     fig, ax = plt.subplots(figsize=(10, 6))
 
     # Plot each data series on the same axes
-    ax.plot(x, y_true, marker='o', linestyle='-', label='Actual Data')
-    ax.plot(x, y_pred, marker='s', linestyle='--', label='Model Prediction')
+    ax.plot(x, y_true, linestyle='-', label='Actual Data')
+    ax.plot(x, y_pred, linestyle='-', label='Model Prediction')
 
     # --- 3. Chart Customization ---
     # Add a title and labels for clarity
-    ax.set_title('Monthly Sales Comparison: Product A vs. Product B')
     ax.set_xlabel('Time')
-    ax.set_ylabel('Units Sold')
+    ax.set_ylabel('Traffic (bps)')
 
     # Add a legend to identify the lines
     ax.legend()
@@ -39,7 +38,7 @@ def plot_predictions(x, y_true, y_pred):
     # Add a grid for better readability
     ax.grid(True, which='both', linestyle='--', linewidth=0.5)
 
-    return fig
+    return fig, title
 
 def test_plot():
     """Generates a random scatter plot."""
