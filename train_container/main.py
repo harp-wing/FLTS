@@ -13,9 +13,9 @@ import pandas as pd
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://fastapi_service:8000")
 
 # === Download and read .parquet file ===
-parquet_bytes = get_file(GATEWAY_URL, "preprocessed", "processed_data.parquet")
-table = pq.read_table(source=io.BytesIO(parquet_bytes))
-df = table.to_pandas().dropna()
+parquet_bytes = get_file(GATEWAY_URL, "processed-data", "processed_data.parquet")
+table = pq.read_table(source=parquet_bytes)
+df = table.to_pandas()
 
 # === Split features and targets ===
 X_df = df.drop(columns=["down", "up"])
@@ -48,7 +48,7 @@ config = {
 }
 
 # === MLflow Logging ===
-mlflow.set_tracking_uri("http://mlflow:5000")
+# mlflow.set_tracking_uri("http://localhost:5000")
 mlflow.set_experiment("flts-lstm-demo")
 
 with mlflow.start_run(run_name="LSTM"):
@@ -62,7 +62,7 @@ with mlflow.start_run(run_name="LSTM"):
         model,
         artifact_path="model",
         input_example=X[:1],
-        registered_model_name="flts-lstm"
+        registered_model_name=None
     )
 
     mlflow.log_metric("val_loss", 0.002)

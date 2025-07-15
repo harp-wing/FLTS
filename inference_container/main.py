@@ -41,12 +41,14 @@ import mlflow
 import io
 from client_utils import get_file, post_file
 import os
+import pandas as pd
 
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://fastapi_service:8000")
 
 # === Pull test data from MinIO ===
-X_test_bytes = get_file(GATEWAY_URL, "preprocessed", "X_test.npy")
-X_test = np.load(X_test_bytes)
+X_test_bytes = get_file(GATEWAY_URL, "dataset", "PobleSec.csv")
+X_test = pd.read_csv(X_test_bytes)
+print(X_test.columns)
 
 # === Load model from MLflow ===
 mlflow.set_tracking_uri("http://mlflow:5000")
@@ -60,5 +62,5 @@ y_pred = model.predict(X_test)
 preds_bytes = io.BytesIO()
 np.save(preds_bytes, y_pred)
 preds_bytes.seek(0)
-post_file(GATEWAY_URL, "predictions", "elborn_preds.npy", preds_bytes.read())
+post_file(GATEWAY_URL, "predictions", "poblesec_pred.npy", preds_bytes.read())
 print("Predictions pushed to MinIO")

@@ -1,14 +1,39 @@
-# predict_container/Dockerfile
+# syntax=docker/dockerfile:1
 
-FROM python:3.12-slim
+ARG PYTHON_VERSION=3.11.4
+FROM python:${PYTHON_VERSION}-slim AS base
+
+# Prevents Python from writing pyc files.
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Keeps Python from buffering stdout and stderr to avoid situations where
+# the application crashes without emitting any logs due to buffering.
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY inference_container/. .
-COPY shared ./shared
-COPY train_container/m1.py ./train_container/m1.py
+# Create a non-privileged user that the app will run under.
+# See https://docs.docker.com/go/dockerfile-user-best-practices/
+ARG UID=10001
+RUN adduser \
+    --disabled-password \
+    --gecos "" \
+    --home "/nonexistent" \
+    --shell "/sbin/nologin" \
+    --no-create-home \
+    --uid "${UID}" \
+    appuser
 
-RUN pip install torch==2.2.2+cpu torchvision==0.17.2+cpu -f https://download.pytorch.org/whl/torch_stable.html
-RUN pip install mlflow numpy pandas boto3
+# Install dependencies.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=bind,source=requirements.txt,target=requirements.txt \
+    python -m pip install -r requirements.txt
+
+# Switch to the non-privileged user to run the application.
+USER appuser
+
+COPY . .
+
+EXPOSE 8000
 
 CMD ["python", "main.py"]

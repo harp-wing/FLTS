@@ -69,6 +69,11 @@ services:
       - "5432:5432"
     networks:
       - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # 🔁 MLflow Server
   mlflow:
@@ -76,30 +81,38 @@ services:
     ports:
       - "5000:5000"
     environment:
-      - MLFLOW_S3_ENDPOINT_URL=http://fastapi-app:8000
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
     depends_on:
-      - postgres
-      - fastapi-app
+      postgres:
+        condition: service_healthy # Waits for the healthcheck to pass
+      minio:
+        condition: service_started # MinIO starts fast, so 'started' is often enough
     networks:
       - app-network
     command: >
-      mlflow server 
-      --backend-store-uri postgresql://mlflow:mlflow@postgres/mlflow 
+      sh -c "
+      echo 'Attempting to create MinIO bucket...' &&
+      awslocal --endpoint-url=http://minio:9000 s3 mb s3://mlflow || true &&
+      echo 'Bucket check complete. Starting MLflow server...' &&
+      mlflow server
+      --backend-store-uri postgresql://mlflow:mlflow@postgres/mlflow
       --default-artifact-root s3://mlflow/
-      --host 0.0.0.0 
+      --host 0.0.0.0
       --port 5000
+      "
 
   # 🧠 Training Container
   train:
     build: ./train_container
     depends_on:
       - mlflow
+      - postgres
     environment:
       - GATEWAY_URL=http://fastapi-app:8000
       - MLFLOW_TRACKING_URI=http://mlflow:5000
-      - MLFLOW_S3_ENDPOINT_URL=http://fastapi-app:8000
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
     networks:
@@ -108,14 +121,14 @@ services:
   # 🔮 Inference Container
   inference:
     build: 
-      context: .
-      dockerfile: inference_container/Dockerfile
+      context: ./inference_container
+      dockerfile: Dockerfile
     depends_on:
       - mlflow
     environment:
       - GATEWAY_URL=http://fastapi-app:8000
       - MLFLOW_TRACKING_URI=http://mlflow:5000
-      - MLFLOW_S3_ENDPOINT_URL=http://fastapi-app:8000
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
     networks:

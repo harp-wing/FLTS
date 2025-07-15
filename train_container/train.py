@@ -1,6 +1,4 @@
 # train_container/train.py
-
-import torch
 from m1 import LSTM
 from shared.train_utils import train
 from shared.data_utils import to_torch_dataset

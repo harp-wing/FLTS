@@ -4,12 +4,14 @@ import io
 import asyncio
 import base64
 from functools import wraps
+from client_utils import get_file
 from fastapi import FastAPI, Request                                            # type: ignore
 from fastapi.responses import HTMLResponse                                      # type: ignore
 from fastapi.templating import Jinja2Templates                                  # type: ignore
 from starlette.concurrency import run_in_threadpool                             # type: ignore
 import numpy as np                                                              # type: ignore
 import pandas as pd                                                             # type: ignore
+import mlflow                                                                   # type: ignore
 import matplotlib.pyplot as plt                                                 # type: ignore
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas     # type: ignore
 
@@ -18,9 +20,17 @@ from metrics import *
 # Data import handling
 # TRAINING PERFORMANCE METRICS
 # INFERRED DATA
+FASTAPI_URL = "http://fastapi-app:8000"
+BUCKET = "dataset"
+OBJECT_NAME = "PobleSec.csv"
+MLFLOW_TRACKING_URI = "localhost:5000"
 
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
-supported = ["MLP", "LSTM"] # supported models
+y_true = get_file(FASTAPI_URL, BUCKET, OBJECT_NAME)
+# y_pred = TBD
+
+supported = ["LSTM"] # supported models
 
 # for model in models:
 #     if model in supported:
