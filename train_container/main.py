@@ -1,14 +1,11 @@
 import numpy as np
-import torch
-import mlflow
-import mlflow.pytorch
-import io
+import mlflow # type: ignore
+import mlflow.pytorch # type: ignore
 from train import train_model
+from data_utils import window_data
 from client_utils import get_file
 import os
 import pyarrow.parquet as pq
-import pyarrow as pa
-import pandas as pd
 
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://fastapi_service:8000")
 
@@ -16,82 +13,59 @@ GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://fastapi_service:8000")
 parquet_bytes = get_file(GATEWAY_URL, "processed-data", "processed_data.parquet")
 table = pq.read_table(source=parquet_bytes)
 df = table.to_pandas()
+parquet_bytes = get_file(GATEWAY_URL, "processed-data", "test_processed_data.parquet")
+table = pq.read_table(source=parquet_bytes)
+test_df = table.to_pandas()
 
-# === Split features and targets ===
-X_df = df
-y_df = df[["down", "up"]]
 
-X = X_df.to_numpy().astype(np.float32)
-y = y_df.to_numpy().astype(np.float32)
+NUM_FEATURES = df.shape[1]
+TIME_FEATURES = ["min_of_day", "day_of_week", "day_of_year"]
+TIME_FEATURES = [f"{feature}_sin" for feature in TIME_FEATURES] + [f"{feature}_cos" for feature in TIME_FEATURES]
 
-# === LSTM reshaping ===
-FORECAST_HORIZON=3982
-T = 5
-y_features = y.shape[1]  # Number of target features (e.g., "down", "up")
+INPUT_SEQUENCE_LENGTH = 10
+OUTPUT_SEQUENCE_LENGTH = 1
+TRAIN_TEST_SPLIT = 0.8
 
-# Create sliding window samples
-num_samples = len(X) - T - FORECAST_HORIZON + 1
+print(df.columns.tolist())
 
-# Pre-allocate arrays for efficiency
-X_new = np.zeros((num_samples, T, X.shape[1]), dtype=np.float32)
-y_new = np.zeros((num_samples, FORECAST_HORIZON, y_features), dtype=np.float32)
+X, y = window_data(df, TIME_FEATURES, input_len=INPUT_SEQUENCE_LENGTH, output_len=OUTPUT_SEQUENCE_LENGTH)
 
-for i in range(num_samples):
-    X_new[i] = X[i : i+T]
-    y_new[i] = y[i+T : i+T+FORECAST_HORIZON]
+train_size = int(len(X) * TRAIN_TEST_SPLIT)
+X_train, X_test = X[:train_size], X[train_size:]
+y_train, y_test = y[:train_size], y[train_size:]
 
-# Flatten the target's last two dimensions for the MLP head
-# Shape changes from (num_samples, 3982, 2) to (num_samples, 7964)
-y_new_flat = y_new.reshape(num_samples, FORECAST_HORIZON * y_features)
-
-# Update the main variables
-X = X_new
-y = y_new_flat
-
-# Sanity check
-mask = ~np.isnan(y).any(axis=1)
-X = X[mask]
-y = y[mask]
-
-# === Split into train, test, and validation sets ===
-PERCENT_TRAIN = 0.75
-split_index = int(len(X) * PERCENT_TRAIN)
-X_test = X[:split_index]
-y_test = y[:split_index]
-X_val = X[split_index:]
-y_val = y[split_index:]
-
-# === Config ===
 config = {
     "device": "cpu",
     "model_name": "lstm",
-    "sequence_length": T,
-    "num_lags": T,
-    "num_features": X.shape[2],
-    "output_dim": FORECAST_HORIZON * y_features,
-    "epochs": 5,
+    "num_features": NUM_FEATURES,
+    "num_exogenous_features": len(TIME_FEATURES),
+    "output_dim": OUTPUT_SEQUENCE_LENGTH,
+    "hidden_size": 64,
+    "num_layers": 4,
     "batch_size": 32,
+    "epochs": 40,
     "lr": 0.001
 }
 
 # === MLflow Logging ===
 # mlflow.set_tracking_uri("http://localhost:5000")
-mlflow.set_experiment("flts-lstm-demo")
+mlflow.set_experiment("Default")
+mlflow.autolog()
 
-with mlflow.start_run(run_name="LSTM"):
+
+with mlflow.start_run(run_name="LSTM", log_system_metrics=True):
     mlflow.log_params(config)
-    print(f"[DEBUG] X shape: {X.shape}, y shape: {y.shape}")
-    print(f"[DEBUG] NaNs — y: {np.isnan(y).any() | np.isinf(y).any()}, X: {np.isnan(X).any() | np.isinf(X).any()}")
+    print(f"[DEBUG] X shape: {X_train.shape}, y shape: {y_train.shape}")
+    print(f"[DEBUG] NaNs — y: {np.isnan(y_train).any() | np.isinf(y_train).any()}, X: {np.isnan(X_train).any() | np.isinf(X_train).any()}")
 
-    model = train_model(X, y, X, y, config)
+    model = train_model(X_train, y_train, X_test, y_test, config)
 
     mlflow.pytorch.log_model(
         model,
-        artifact_path="model",
-        input_example=X[:1],
+        name="model",
+        input_example=X_train[:1],
         registered_model_name=None,
-        code_paths=["m1.py"] # This tells MLflow to bundle m1.py with the model!
+        code_paths=["lstm.py"] # This tells MLflow to bundle m1.py with the model!
     )
 
-    mlflow.log_metric("val_loss", 0.002)
     print("✅ Model logged to MLflow")

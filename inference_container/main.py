@@ -1,18 +1,39 @@
 # predict_container/main.py
 import numpy as np
-import mlflow
+import mlflow # type: ignore
 import io
 from client_utils import get_file, post_file
+from data_utils import window_data, check_uniform, time_to_feature
 import os
 import pickle
+import torch
+from torch.utils.data import DataLoader, TensorDataset
 import pandas as pd
 import pyarrow.parquet as pq
 import pyarrow as pa
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler # type: ignore
 
 FASTAPI_URL = os.environ.get("GATEWAY_URL", "http://fastapi_service:8000")
-INFERENCE_LENGTH=3982
+parquet_bytes = get_file(FASTAPI_URL, "processed-data", "test_processed_data.parquet")
+table = pq.read_table(source=parquet_bytes)
+df_eval = table.to_pandas()
 
+TIME_FEATURES = ["min_of_day", "day_of_week", "day_of_year"]
+TIME_FEATURES = [f"{feature}_sin" for feature in TIME_FEATURES] + [f"{feature}_cos" for feature in TIME_FEATURES]
+FEATURES = df_eval.columns.difference(TIME_FEATURES, sort=False).tolist()
+
+N_ENDO_FEATURES = len(FEATURES)
+
+# To be imported from other containers
+MODEL_NAME = "LSTM"
+OUTPUT_SEQ_LEN = 1
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+SAMPLE_IDX = 0  # Index to start prediction from
+INFERENCE_LENGTH = 720  # Number of steps to predict
+
+
+X_eval, y_eval = window_data(df_eval, TIME_FEATURES)
 
 def create_subset_scaler(original_scaler, original_columns, subset_columns):
     """
@@ -27,6 +48,9 @@ def create_subset_scaler(original_scaler, original_columns, subset_columns):
     Returns:
         A new, configured scaler for the subset of data.
     """
+    if original_columns == subset_columns:
+        return original_scaler
+
     # Find the integer indices of the subset columns
     subset_indices = [original_columns.get_loc(col) for col in subset_columns]
 
@@ -55,13 +79,10 @@ def create_subset_scaler(original_scaler, original_columns, subset_columns):
     return subset_scaler
 
 
-# === Pull data for model prediction from MinIO ===
-input_data_bytes = get_file(FASTAPI_URL, "processed-data", "processed_data.parquet")
-
-if input_data_bytes:
+if parquet_bytes:
     # 2. Read the schema to access the file's metadata
     # This is more efficient than reading the entire table if you only need metadata.
-    schema = pq.read_schema(input_data_bytes)
+    schema = pq.read_schema(parquet_bytes)
     custom_metadata = schema.metadata
 
     # 3. Retrieve and deserialize the scaler object
@@ -80,22 +101,8 @@ if input_data_bytes:
         print("❌ 'scaler_object' not found in the file's metadata.")
 
 
-
-table = pq.read_table(source=input_data_bytes)
-input_data = table.to_pandas()
-x = input_data.to_numpy().astype(np.float32)
-
-# The model expects an input of shape (batch_size, sequence_length, num_features).
-# From the error, we know the sequence_length (T) is 5.
-# We will use the last 5 data points to make our prediction.
-T = 5
-inference_input = x[-T:]
-
-# Reshape the input from (5, 72) to (1, 5, 72) to represent a single sample.
-inference_input_reshaped = inference_input.reshape(1, T, x.shape[1])
-
 # === Load model from MLflow ===
-experiment_name = "flts-lstm-demo"
+experiment_name = "Default"
 runs_df = mlflow.search_runs(
     experiment_names=[experiment_name],
     order_by=["start_time desc"],
@@ -130,27 +137,100 @@ except Exception as e:
         print(f"Could not list artifacts: {list_e}")
     exit()
 
-y_pred = model.predict(inference_input_reshaped)
+X_eval_tensor = torch.from_numpy(X_eval).float()
+y_eval_tensor = torch.from_numpy(y_eval).float()
 
-# We add a check to ensure the reshape is possible.
-if y_pred.shape[1] % 2 != 0:
-    raise ValueError("The number of columns must be an even number to reshape into (2, n).")
-print(y_pred.shape)
-reshaped_array = y_pred.reshape((2, -1)).T
-print(reshaped_array.shape)
-subset_scaler = create_subset_scaler(scaler, input_data.columns, ["down", "up"])
+eval_dataset = TensorDataset(X_eval_tensor, y_eval_tensor)
+eval_loader = DataLoader(eval_dataset, batch_size=32, shuffle=False)
 
-df = pd.DataFrame(reshaped_array, columns=["down", "up"])
-df = pd.DataFrame(subset_scaler.inverse_transform(df), columns=df.columns)
-print(df)
 
-# === Push predictions to MinIO ===
+# Determine the sampling frequency from the data
+timedelta = check_uniform(df_eval)
+
+# How much real data is available for the forecast window
+remaining_real_data = X_eval.shape[0] - SAMPLE_IDX
+available_future_steps = min(remaining_real_data, INFERENCE_LENGTH)
+num_extension_steps = INFERENCE_LENGTH - available_future_steps
+
+df_predictions = pd.DataFrame(
+    index=pd.date_range(
+        start=df_eval.index[SAMPLE_IDX],
+        periods=INFERENCE_LENGTH,
+        freq=timedelta
+    ),
+    columns=df_eval.columns
+)
+
+df_predictions = time_to_feature(df_predictions)
+
+current_sequence = X_eval_tensor[SAMPLE_IDX].unsqueeze(0).to(device)
+
+with torch.no_grad():
+    step = 0
+    while step < INFERENCE_LENGTH:
+        multi_step_pred = model.predict(current_sequence.cpu().numpy())   # Shape: (1, OUTPUT_SEQ_LEN, num_features)
+        remaining_steps = INFERENCE_LENGTH - step   # Decide how many of the predicted steps to use in this loop
+        steps_to_use = min(OUTPUT_SEQ_LEN, remaining_steps)
+
+        for i in range(steps_to_use):
+            absolute_step = step + i
+            next_step = absolute_step + 1
+            if absolute_step >= INFERENCE_LENGTH:
+                break
+
+            # Get prediction and store it
+            current_pred = multi_step_pred[:, i, :].flatten()
+            df_predictions.loc[df_predictions.index[absolute_step], FEATURES] = current_pred
+
+            # Update sequence
+            if next_step <= available_future_steps:
+                current_sequence = X_eval_tensor[SAMPLE_IDX + next_step].unsqueeze(0).to(device)
+            else:
+                extension_idx = next_step - available_future_steps
+                print("CALLED EXTENSION MODE")
+
+                if extension_idx < df_predictions.shape[0]:
+                    # Extract future exogenous data from df_extension
+                    extension_row = df_predictions.iloc[[extension_idx]][TIME_FEATURES]
+                    numpy_extension, _ = window_data(
+                        extension_row,
+                        TIME_FEATURES,
+                        input_len=1, output_len=1
+                    )
+                    exog_tensor = torch.from_numpy(numpy_extension).float()
+                    pred_tensor = torch.tensor(current_pred).view(1, 1, -1)
+                    print(f"Current Sequence shape: {current_sequence.shape}")
+                    print(f"Prediction Tensor shape: {pred_tensor.shape}")
+                    print(f"Exogenous Tensor shape: {exog_tensor.shape}")
+
+                    current_pred = torch.cat((pred_tensor, exog_tensor), dim=-1)
+                    current_sequence = torch.cat((current_sequence[:, 1:, :], current_pred), dim=1)
+                else:
+                    print(f"[Warning] df_extension exhausted at index {extension_idx}")
+                    break
+
+        step += steps_to_use
+
+
+df_predictions = df_predictions.drop(columns=TIME_FEATURES)
+df = pd.DataFrame(
+    scaler.inverse_transform(df_predictions),
+    index=df_predictions.index,
+    columns=df_predictions.columns
+)
+
+print(f"Inference completed:")
+print(f"- Used actual future values for first {min(available_future_steps, INFERENCE_LENGTH)} steps")
+if INFERENCE_LENGTH > available_future_steps:
+    print(f"- Switched to recursive mode after step {available_future_steps}")
+print(f"- Model predicts {OUTPUT_SEQ_LEN} step(s) at a time")
+print(f"- Total predictions generated: {df.shape[0]}")
 
 output_table = pa.Table.from_pandas(df)
 parquet_buffer = io.BytesIO()
 pq.write_table(output_table, parquet_buffer)
 content_bytes = parquet_buffer.getvalue()
 
-post_file(FASTAPI_URL, "predictions", "LSTM.parquet", content_bytes)
+post_file(FASTAPI_URL, "predictions", f"{MODEL_NAME}.parquet", content_bytes)
 
 print("Predictions pushed to MinIO")

@@ -34,12 +34,20 @@ mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 y_true_bytes = get_file(FASTAPI_URL, BUCKET, OBJECT_NAME)
 if isinstance(y_true_bytes, io.BytesIO):
     df_true = pd.read_csv(y_true_bytes, parse_dates=["time"])
+
+# y_true_bytes = get_file(FASTAPI_URL, "processed-data", "test_processed_data.parquet")
+# table = pq.read_table(source=y_true_bytes)
+# df_true = table.to_pandas()
+
 parquet_bytes = get_file(FASTAPI_URL, "predictions", "LSTM.parquet")
 table = pq.read_table(source=parquet_bytes)
 df_pred = table.to_pandas()
 
+print(df_true.index)
 print(df_true)
 print(df_pred)
+
+df_true = df_true.iloc[:df_pred.shape[0], :]
 
 supported = ["LSTM"] # supported models
 
@@ -81,7 +89,6 @@ def plot_to_base64(func):
     return wrapper
 
 # Decorate the metrics plotting functions (Doing it here so the metrics function maintain figure return)
-_test_plot = plot_to_base64(test_plot)
 _plot_predictions = plot_to_base64(plot_predictions)
 
 
@@ -95,11 +102,15 @@ async def index(request: Request):
     PLOTS = {
         "down" : {
             "title": "Comparison of Actual vs Predicted Down",
-            "generator": lambda: _plot_predictions(df_true["time"], df_true["down"], df_pred["down"], "Comparison of Actual vs Predicted Down")
+            "generator": lambda: _plot_predictions(df_true.index, df_true["down"], df_pred["down"], "Comparison of Actual vs Predicted Down")
         },
         "up" : {
             "title": "Comparison of Actual vs Predicted Up",
-            "generator": lambda: _plot_predictions(df_true["time"], df_true["up"], df_pred["up"], "Comparison of Actual vs Predicted Up")
+            "generator": lambda: _plot_predictions(df_true.index, df_true["up"], df_pred["up"], "Comparison of Actual vs Predicted Up")
+        },
+        "rnti_count" : {
+            "title": "Comparison of Actual vs Predicted RNTI Count",
+            "generator": lambda: _plot_predictions(df_true.index, df_true["rnti_count"], df_pred["rnti_count"], "Comparison of Actual vs Predicted RNTI Count")
         },
     }
 

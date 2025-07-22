@@ -72,7 +72,7 @@ def corrplot(df):
     n_features = len(features)
     df_scaled = pd.DataFrame(StandardScaler().fit_transform(df_features), columns=features).astype(np.float64)
     
-    fig, axs = plt.subplots(n_features, n_features, figsize=(n_features * 1.5, n_features * 1.5), constrained_layout=True)
+    fig, axs = plt.subplots(n_features, n_features, figsize=(n_features * 1.5, n_features * 1), constrained_layout=True)
 
     for n, row in enumerate(features):
         for m, col in enumerate(features):
@@ -149,7 +149,7 @@ def pca_plot(df: pd.DataFrame, var_threshold=0.95):
     dist_corr_matrix = dist_corr_matrix.astype(float)
 
     # Plot the heatmap
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(12, 10))
     sns.heatmap(
         dist_corr_matrix,
         annot=True,
@@ -178,7 +178,7 @@ def pacf_plot(df, maxlags=15):
     df_features = df.select_dtypes(include=np.number).dropna()
     features = df_features.columns
 
-    fig, axes = plt.subplots(len(features), 1, figsize=(10, 12), sharex=True)
+    fig, axes = plt.subplots(len(features), 1, figsize=(12, 12), sharex=True)
 
     for i, column in enumerate(features):
         plot_pacf(df_features[column], lags=maxlags, ax=axes[i], title=f'{column}')

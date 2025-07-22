@@ -13,7 +13,7 @@ if parent not in sys.path:
 import copy
 from logging import INFO
 from typing import Tuple, List, Union
-
+import mlflow
 import torch
 from matplotlib import pyplot as plt
 
@@ -61,15 +61,11 @@ def train(model: torch.nn.Module,
         model.to(device)
         model.train()
         epoch_loss = []
-        for x, exogenous, y_hist, y in train_loader:
+        for x, y in train_loader:
             x, y = x.to(device), y.to(device)
-            # y_hist = y_hist.to(device)
-            if exogenous is not None and len(exogenous) > 0:
-                exogenous = exogenous.to(device)
-            else:
-                exogenous = None
+
             optimizer.zero_grad()
-            y_pred = model(x, exogenous, device=device)
+            y_pred = model(x)
             loss = criterion(y_pred, y)
             if fedprox_mu > 0.:
                 fedprox_reg = 0.
@@ -98,6 +94,29 @@ def train(model: torch.nn.Module,
                       f"rmse: {train_rmse}, mae {train_mae}, r2: {train_r2}, nrmse: {train_nrmse}")
             log(INFO, f"Epoch {epoch + 1} [Test]: loss {test_loss}, mse: {test_mse}, "
                       f"rmse: {test_rmse}, mae {test_mae}, r2: {test_r2}, nrmse: {test_nrmse}")
+            
+            train_metrics = {
+                "train_loss": train_loss,
+                "train_mse": train_mse,
+                "train_rmse": train_rmse,
+                "train_mae": train_mae,
+                "train_r2": train_r2,
+                "train_nrmse": train_nrmse
+            }
+            # The 'step' parameter links the metrics to the specific epoch number.
+            mlflow.log_metrics(train_metrics, step=epoch + 1)
+
+            test_metrics = {
+                "test_loss": test_loss,
+                "test_mse": test_mse,
+                "test_rmse": test_rmse,
+                "test_mae": test_mae,
+                "test_r2": test_r2,
+                "test_nrmse": test_nrmse
+            }
+            mlflow.log_metrics(test_metrics, step=epoch + 1)
+
+            
         train_loss_history.append(train_mse)
         train_rmse_history.append(train_rmse)
         test_loss_history.append(test_mse)
@@ -124,6 +143,10 @@ def train(model: torch.nn.Module,
         if use_carbontracker and cb_tracker is not None:
             cb_tracker.epoch_end()
 
+    for name, param in model.named_parameters():
+        if param.requires_grad and param.grad is not None:
+            print(f"{name}: grad norm = {param.grad.norm().item()}")
+
     if plot_history:
         plt.plot(train_loss_history, label="Train MSE")
         plt.plot(test_loss_history, label="Test MSE")
@@ -144,30 +167,30 @@ def train(model: torch.nn.Module,
 
 
 def test(model, data, criterion, device="cuda") -> Union[
-    Tuple[float, float, float, float], List[torch.tensor], torch.tensor]:
+    Tuple[float, float, float, float, float, float],
+    Tuple[float, float, float, float, float, float, torch.Tensor]
+]:
     """Tests a trained model."""
     model.to(device)
     model.eval()
     y_true, y_pred = [], []
     loss = 0.
     with torch.no_grad():
-        for x, exogenous, y_hist, y in data:
+        for x, y in data:
             x, y = x.to(device), y.to(device)
-            # y_hist = y_hist.to(device)
-            if exogenous is not None and len(exogenous) > 0:
-                exogenous = exogenous.to(device)
-            else:
-                exogenous = None
-            out = model(x, exogenous, device=device)
+
+            out = model(x)
             if criterion is not None:
-                loss += criterion(out, y).item()
-            y_true.extend(y)
-            y_pred.extend(out)
+                loss += criterion(out, y).item() * x.size(0)
+
+            y_true.append(y.cpu())
+            y_pred.append(out.cpu())
 
     loss /= len(data.dataset)
 
-    y_true = torch.stack(y_true)
-    y_pred = torch.stack(y_pred)
+    y_true = torch.cat(y_true).squeeze(1)
+    y_pred = torch.cat(y_pred).squeeze(1)
+
     mse, rmse, mae, r2, nrmse = accumulate_metric(y_true.cpu(), y_pred.cpu())
     if criterion is None:
         return mse, rmse, mae, r2, nrmse, y_pred

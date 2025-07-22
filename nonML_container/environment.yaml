@@ -1,0 +1,13 @@
+name: appenv
+channels:
+  - conda-forge
+dependencies:
+  - python=3.9
+  - numpy=1.26.0
+  - pandas=1.5.3
+  - prophet=1.0.1
+  - pip
+  - pip:
+      - statsforecast==2.0.2
+      - greykite
+      - holidays==0.18
