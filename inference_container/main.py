@@ -3,234 +3,217 @@ import numpy as np
 import mlflow # type: ignore
 import io
 from client_utils import get_file, post_file
-from data_utils import window_data, check_uniform, time_to_feature
+from data_utils import window_data, check_uniform, time_to_feature, subset_scaler
+from kafka_utils import create_producer, create_consumer, produce_message, consume_messages, publish_error
+from inferencer import Inferencer
 import os
 import pickle
 import torch
-from torch.utils.data import DataLoader, TensorDataset
-import pandas as pd
+import queue
+import threading
+import time
 import pyarrow.parquet as pq
-import pyarrow as pa
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler # type: ignore
 
-FASTAPI_URL = os.environ.get("GATEWAY_URL", "http://fastapi_service:8000")
-parquet_bytes = get_file(FASTAPI_URL, "processed-data", "test_processed_data.parquet")
-table = pq.read_table(source=parquet_bytes)
-df_eval = table.to_pandas()
+# --- Environment Variables ---
+GATEWAY_URL = os.environ.get("GATEWAY_URL")
+if not GATEWAY_URL:
+    raise TypeError("Environment variable, GATEWAY_URL, not defined")
+PREPROCESSING_TOPIC = os.environ.get("CONSUMER_TOPIC_0") # Topic for preprocessed data claim checks
+if not PREPROCESSING_TOPIC:
+    raise TypeError("Environment variable, PREPROCESSING_TOPIC, not defined")
+TRAINING_TOPIC = os.environ.get("CONSUMER_TOPIC_1") # Topic for trained model claim checks
+if not TRAINING_TOPIC:
+    raise TypeError("Environment variable, TRAINING_TOPIC, not defined")
+CONSUMER_GROUP_ID = os.environ.get("CONSUMER_GROUP_ID", "inference_group") # Consumer Group ID
+if not CONSUMER_GROUP_ID:
+    raise TypeError("Environment variable, CONSUMER_GROUP_ID, not defined")
+PRODUCER_TOPIC = os.environ.get("PRODUCER_TOPIC") # Topic for inference results
+if not PRODUCER_TOPIC:
+    raise TypeError("Environment variable, PRODUCER_TOPIC, not defined")
 
 TIME_FEATURES = ["min_of_day", "day_of_week", "day_of_year"]
 TIME_FEATURES = [f"{feature}_sin" for feature in TIME_FEATURES] + [f"{feature}_cos" for feature in TIME_FEATURES]
-FEATURES = df_eval.columns.difference(TIME_FEATURES, sort=False).tolist()
-
-N_ENDO_FEATURES = len(FEATURES)
-
-# To be imported from other containers
-MODEL_NAME = "LSTM"
-OUTPUT_SEQ_LEN = 1
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-SAMPLE_IDX = 0  # Index to start prediction from
-INFERENCE_LENGTH = 720  # Number of steps to predict
 
+# --- Kafka Message Queue ---
+message_queue = queue.Queue() # A single queue to hold messages from both consumers
 
-X_eval, y_eval = window_data(df_eval, TIME_FEATURES)
+# --- Kafka Producer for Inference Output and DLQ ---
+producer = create_producer()
+dlq_topic = f"DLQ-{PRODUCER_TOPIC}"
 
-def create_subset_scaler(original_scaler, original_columns, subset_columns):
+# --- Kafka Callback Functions Factory ---
+def _kafka_callback_factory(service_instance: Inferencer, source_name: str, message_queue_ref: queue.Queue):
+    """Creates a callback function for Kafka consumers to put messages into the shared queue."""
+    def callback(message):
+        print(f"\nConsumer received {source_name} message with key: {message.key} and added to queue.")
+        message_queue_ref.put({"source": source_name, "message": message})
+    return callback
+
+# --- Worker Thread Function ---
+def message_handler(service: Inferencer, message_queue: queue.Queue):
     """
-    Creates a new scaler for a subset of features from an existing fitted scaler.
-    This version works for both StandardScaler and MinMaxScaler.
-
-    Args:
-        original_scaler: The scaler object (StandardScaler or MinMaxScaler).
-        original_columns (pd.Index): The .columns attribute from the original DataFrame.
-        subset_columns (list): A list of column names for the new scaler.
-
-    Returns:
-        A new, configured scaler for the subset of data.
+    Worker thread function that processes messages from the queue.
+    It dispatches tasks based on the message source (training or preprocessing).
     """
-    if original_columns == subset_columns:
-        return original_scaler
+    print("Inference worker thread started. Waiting for messages in queue...")
+    while True:
+        try:
+            queue_item = message_queue.get()
+            source = queue_item.get("source")
+            message = queue_item.get("message")
 
-    # Find the integer indices of the subset columns
-    subset_indices = [original_columns.get_loc(col) for col in subset_columns]
+            print(f"Inference worker received message from {source} queue with key: {message.key}")
 
-    # Check scaler type and assign the correct attributes
-    if isinstance(original_scaler, StandardScaler):
-        subset_scaler = StandardScaler()
-        # StandardScaler uses 'mean_' and 'scale_' (std dev)
-        if original_scaler.mean_ is None or original_scaler.scale_ is None:
-            raise ValueError("The original StandardScaler is not fitted or missing required attributes.")
-        subset_scaler.mean_ = original_scaler.mean_[subset_indices]
-        subset_scaler.scale_ = original_scaler.scale_[subset_indices]
-    elif isinstance(original_scaler, MinMaxScaler):
-        subset_scaler = MinMaxScaler()
-        # MinMaxScaler uses 'min_' and 'scale_' (feature range)
-        if original_scaler.min_ is None or original_scaler.scale_ is None:
-            raise ValueError("The original MinMaxScaler is not fitted or missing required attributes.")
-        subset_scaler.min_ = original_scaler.min_[subset_indices]
-        subset_scaler.scale_ = original_scaler.scale_[subset_indices]
-    else:
-        raise TypeError("Unsupported scaler type. This function only supports StandardScaler and MinMaxScaler.")
+            if source == "training":
+                claim_check = message.value
+                operation = claim_check.get("operation")
+                status = claim_check.get("status")
+                experiment = claim_check.get("experiment")
+                run_name = claim_check.get("run_name")
 
-    # Set feature info for scikit-learn validation
-    subset_scaler.n_features_in_ = len(subset_columns)
-    subset_scaler.feature_names_in_ = np.array(subset_columns, dtype=object)
+                if operation and (status == "SUCCESS") and experiment and run_name:
+                    print(f"Inference worker attempting to load new model for experiment '{experiment}', run '{run_name}'.")
+                    service.load_model(experiment, run_name)
 
-    return subset_scaler
-
-
-if parquet_bytes:
-    # 2. Read the schema to access the file's metadata
-    # This is more efficient than reading the entire table if you only need metadata.
-    schema = pq.read_schema(parquet_bytes)
-    custom_metadata = schema.metadata
-
-    # 3. Retrieve and deserialize the scaler object
-    serialized_scaler = custom_metadata.get(b'scaler_object')
-    
-    if serialized_scaler:
-        scaler = pickle.loads(serialized_scaler)
-        
-        # You can also retrieve the scaler type you saved
-        scaler_type = custom_metadata.get(b'scaler_type', b'Unknown').decode('utf-8')
-
-        print("✅ Scaler object retrieved successfully!")
-        print(f"Scaler Type: {scaler_type}")
-        print("Scaler Object:", scaler)
-    else:
-        print("❌ 'scaler_object' not found in the file's metadata.")
-
-
-# === Load model from MLflow ===
-experiment_name = "Default"
-runs_df = mlflow.search_runs(
-    experiment_names=[experiment_name],
-    order_by=["start_time desc"],
-    max_results=1
-)
-# Check if any runs were found
-if runs_df.empty:
-    raise Exception(f"No runs found in experiment '{experiment_name}'.")
-
-# Get the 'run_id' from the first row of the DataFrame.
-run_id = runs_df.loc[0, 'run_id']
-print(f"Found run with ID: {run_id}")
-
-# The artifact path is the folder name used when logging the model.
-artifact_path = "model"
-model_uri = f"runs:/{run_id}/{artifact_path}"
-
-# Load the model
-print(f"Loading model from: {model_uri}")
-try:
-    model = mlflow.pyfunc.load_model(model_uri)
-    print("Model loaded successfully.")
-except Exception as e:
-    print(f"Error loading model: {e}")
-    # Listing artifacts to help debug.
-    print(f"\nListing artifacts for run ID {run_id} to help find the correct path:")
-    try:
-        artifacts = mlflow.artifacts.list_artifacts(run_id=run_id)
-        for artifact in artifacts:
-            print(f"- {artifact.path}")
-    except Exception as list_e:
-        print(f"Could not list artifacts: {list_e}")
-    exit()
-
-X_eval_tensor = torch.from_numpy(X_eval).float()
-y_eval_tensor = torch.from_numpy(y_eval).float()
-
-eval_dataset = TensorDataset(X_eval_tensor, y_eval_tensor)
-eval_loader = DataLoader(eval_dataset, batch_size=32, shuffle=False)
-
-
-# Determine the sampling frequency from the data
-timedelta = check_uniform(df_eval)
-
-# How much real data is available for the forecast window
-remaining_real_data = X_eval.shape[0] - SAMPLE_IDX
-available_future_steps = min(remaining_real_data, INFERENCE_LENGTH)
-num_extension_steps = INFERENCE_LENGTH - available_future_steps
-
-df_predictions = pd.DataFrame(
-    index=pd.date_range(
-        start=df_eval.index[SAMPLE_IDX],
-        periods=INFERENCE_LENGTH,
-        freq=timedelta
-    ),
-    columns=df_eval.columns
-)
-
-df_predictions = time_to_feature(df_predictions)
-
-current_sequence = X_eval_tensor[SAMPLE_IDX].unsqueeze(0).to(device)
-
-with torch.no_grad():
-    step = 0
-    while step < INFERENCE_LENGTH:
-        multi_step_pred = model.predict(current_sequence.cpu().numpy())   # Shape: (1, OUTPUT_SEQ_LEN, num_features)
-        remaining_steps = INFERENCE_LENGTH - step   # Decide how many of the predicted steps to use in this loop
-        steps_to_use = min(OUTPUT_SEQ_LEN, remaining_steps)
-
-        for i in range(steps_to_use):
-            absolute_step = step + i
-            next_step = absolute_step + 1
-            if absolute_step >= INFERENCE_LENGTH:
-                break
-
-            # Get prediction and store it
-            current_pred = multi_step_pred[:, i, :].flatten()
-            df_predictions.loc[df_predictions.index[absolute_step], FEATURES] = current_pred
-
-            # Update sequence
-            if next_step <= available_future_steps:
-                current_sequence = X_eval_tensor[SAMPLE_IDX + next_step].unsqueeze(0).to(device)
-            else:
-                extension_idx = next_step - available_future_steps
-                print("CALLED EXTENSION MODE")
-
-                if extension_idx < df_predictions.shape[0]:
-                    # Extract future exogenous data from df_extension
-                    extension_row = df_predictions.iloc[[extension_idx]][TIME_FEATURES]
-                    numpy_extension, _ = window_data(
-                        extension_row,
-                        TIME_FEATURES,
-                        input_len=1, output_len=1
-                    )
-                    exog_tensor = torch.from_numpy(numpy_extension).float()
-                    pred_tensor = torch.tensor(current_pred).view(1, 1, -1)
-                    print(f"Current Sequence shape: {current_sequence.shape}")
-                    print(f"Prediction Tensor shape: {pred_tensor.shape}")
-                    print(f"Exogenous Tensor shape: {exog_tensor.shape}")
-
-                    current_pred = torch.cat((pred_tensor, exog_tensor), dim=-1)
-                    current_sequence = torch.cat((current_sequence[:, 1:, :], current_pred), dim=1)
+                    if service.df is not None:
+                        service.perform_inference(service.df)
                 else:
-                    print(f"[Warning] df_extension exhausted at index {extension_idx}")
-                    break
+                    print(f"Inference worker WARN: Training message received without complete details or success status: {claim_check}")
+                    publish_error(
+                        service.producer,
+                        service.dlq_topic,
+                        "Training Message Parse",
+                        "Failure",
+                        "Incomplete training claim check",
+                        claim_check
+                    )
+            elif source == "preprocessing":
+                claim_check = message.value
+                operation = claim_check.get("operation")
+                bucket = claim_check.get("bucket")
+                object_key = claim_check.get("object_key")
 
-        step += steps_to_use
+                if operation == "post: test data" and bucket and object_key:
+                    print(f"Inference worker fetching data from object store: s3://{bucket}/{object_key}")
+                    try:
+                        parquet_bytes = get_file(service.gateway_url, bucket, object_key)
+                        table = pq.read_table(source=parquet_bytes)
+                        service.df = table.to_pandas()
+                        if parquet_bytes:
+                            # Read the schema to access the file's metadata
+                            schema = pq.read_schema(parquet_bytes)
+                            custom_metadata = schema.metadata
+
+                            # 3. Retrieve and deserialize the scaler object
+                            serialized_scaler = custom_metadata.get(b'scaler_object')
+                            
+                            if serialized_scaler:
+                                inferencer.current_scaler = pickle.loads(serialized_scaler)
+                                scaler_type = custom_metadata.get(b'scaler_type', b'Unknown').decode('utf-8')
+
+                                print("Scaler object retrieved successfully.")
+                                print(f"Scaler Type: {scaler_type}")
+                                print("Scaler Object:", inferencer.current_scaler)
+                            else:
+                                print("'scaler_object' not found in the file's metadata.")
+                            
+                            if service.current_model is not None:
+                                service.perform_inference(service.df)
+
+                    except Exception as e:
+                        print(f"Inference worker error fetching, parsing, or during inference for {object_key}: {e}")
+                        publish_error(
+                            service.producer,
+                            service.dlq_topic,
+                            "Data Fetch/Inference",
+                            "Failure",
+                            str(e),
+                            {"bucket": bucket, "object_key": object_key}
+                        )
+                else:
+                    print(f"Inference worker WARN: Preprocessing message received without complete claim check details or unknown operation: {claim_check}")
+                    publish_error(
+                        service.producer,
+                        service.dlq_topic,
+                        "Preprocessing Message Parse",
+                        "Failure",
+                        "Incomplete preprocessing claim check",
+                        claim_check
+                    )
+            else:
+                print(f"Inference worker WARN: Unknown message source: {source}. Message: {message.value}")
+                publish_error(
+                    service.producer,
+                    service.dlq_topic,
+                    "Unknown Message Source",
+                    "Failure",
+                    f"Message from unknown source '{source}'",
+                    message.value
+                )
+
+        except Exception as e:
+            print(f"Inference worker failed to process message from queue: {e}")
+            publish_error(
+                service.producer,
+                service.dlq_topic,
+                "Queue Processing",
+                "Failure",
+                str(e),
+                "No specific payload (queue error)"
+            )
+        finally:
+            message_queue.task_done()
 
 
-df_predictions = df_predictions.drop(columns=TIME_FEATURES)
-df = pd.DataFrame(
-    scaler.inverse_transform(df_predictions),
-    index=df_predictions.index,
-    columns=df_predictions.columns
+inferencer = Inferencer(GATEWAY_URL, producer, dlq_topic, PRODUCER_TOPIC)
+
+# Start the worker thread, passing the service instance and queue
+worker_thread = threading.Thread(
+    target=message_handler,
+    args=(inferencer, message_queue),
+    daemon=True
 )
+worker_thread.start()
 
-print(f"Inference completed:")
-print(f"- Used actual future values for first {min(available_future_steps, INFERENCE_LENGTH)} steps")
-if INFERENCE_LENGTH > available_future_steps:
-    print(f"- Switched to recursive mode after step {available_future_steps}")
-print(f"- Model predicts {OUTPUT_SEQ_LEN} step(s) at a time")
-print(f"- Total predictions generated: {df.shape[0]}")
+#debug
+from random import randint
+CONSUMER_GROUP_ID = f"CONSUMER_GROUP_ID{randint(0, 999)}"
 
-output_table = pa.Table.from_pandas(df)
-parquet_buffer = io.BytesIO()
-pq.write_table(output_table, parquet_buffer)
-content_bytes = parquet_buffer.getvalue()
+# Create and start consumers in their own threads
+training_consumer = create_consumer(TRAINING_TOPIC, CONSUMER_GROUP_ID)
+training_callback_func = _kafka_callback_factory(inferencer, "training", message_queue)
+training_consumer_thread = threading.Thread(
+    target=consume_messages,
+    args=(training_consumer, training_callback_func),
+    daemon=True
+)
+training_consumer_thread.start()
+print(f"Started Kafka consumer for training topic: {TRAINING_TOPIC}")
 
-post_file(FASTAPI_URL, "predictions", f"{MODEL_NAME}.parquet", content_bytes)
+preprocessing_consumer = create_consumer(PREPROCESSING_TOPIC, CONSUMER_GROUP_ID)
+preprocessing_callback_func = _kafka_callback_factory(inferencer, "preprocessing", message_queue)
+preprocessing_consumer_thread = threading.Thread(
+    target=consume_messages,
+    args=(preprocessing_consumer, preprocessing_callback_func),
+    daemon=True
+)
+preprocessing_consumer_thread.start()
+print(f"Started Kafka consumer for preprocessing topic: {PREPROCESSING_TOPIC}")
 
-print("Predictions pushed to MinIO")
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    print("Inference container stopped by user.")
+finally:
+    if training_consumer:
+        training_consumer.close()
+    if preprocessing_consumer:
+        preprocessing_consumer.close()
+    if producer:
+        producer.close()
+    print("Kafka consumers and producer closed.")
+

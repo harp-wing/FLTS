@@ -8,6 +8,6 @@ numpy==2.2.6
 pandas==2.3.0
 scikit-learn==1.7.0
 starlette==0.46.2
-requests
-mlflow
+requests==2.32.4
 pyarrow==20.0.0
+kafka-python[crc32c]==2.2.15

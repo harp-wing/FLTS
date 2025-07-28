@@ -5,11 +5,5 @@ pandas==2.3.0
 scikit-learn==1.7.0
 pyarrow==20.0.0
 
-requests
-minio
-fastapi
-uvicorn
-boto3
-python-multipart
-python-dotenv
-pydantic-settings
+requests==2.32.4
+kafka-python[crc32c]==2.2.15

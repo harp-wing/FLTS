@@ -1,6 +1,40 @@
 # docker-compose.yaml
 
 services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - app-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092" # For communication between containers on the same network
+      - "9093:9093" # For communication from the host machine
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
   # FastAPI Application Service
   fastapi-app:
     build:
@@ -18,7 +52,6 @@ services:
     networks:
       - app-network
 
-
   # MinIO Service
   minio:
     image: minio/minio:latest
@@ -34,30 +67,6 @@ services:
     networks:
       - app-network
   
-
-  # EDA Service
-  data_analyzer:
-    build: ./eda_container
-    ports:
-      - "8010:8010"
-    environment:
-      - GATEWAY_URL=http://fastapi-app:8000
-    depends_on:
-      - fastapi-app
-    networks:
-      - app-network
-
-
-  # Preprocessing Service
-  preprocesser:
-    build: ./preprocessing_container
-    environment:
-      - GATEWAY_URL=http://fastapi-app:8000
-    depends_on:
-      - fastapi-app
-    networks:
-      - app-network
-
   # 🔄 Postgres for MLflow Metadata
   postgres:
     image: postgres:13
@@ -75,7 +84,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # 🔁 MLflow Server
+  # MLflow Server
   mlflow:
     build: ./mlflow_container
     ports:
@@ -103,13 +112,49 @@ services:
       --port 5000
       "
 
-  # 🧠 Training Container
+  # EDA Service
+  data_analyzer:
+    build: ./eda_container
+    ports:
+      - "8010:8010"
+    environment:
+      - GATEWAY_URL=http://fastapi-app:8000
+    depends_on:
+      - fastapi-app
+    networks:
+      - app-network
+
+
+  # Preprocessing Service (Producer)
+  preprocesser:
+    build: ./preprocessing_container
+    environment:
+      - GATEWAY_URL=http://fastapi-app:8000
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - PRODUCER_TOPIC_0=training-data
+      - PRODUCER_TOPIC_1=inference-data
+    depends_on:
+      fastapi-app:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+    networks:
+      - app-network
+    
+  # Training Container (consumer/producer)
   train:
     build: ./train_container
     depends_on:
-      - mlflow
+      mlflow:
+        condition: service_started
+      kafka:
+        condition: service_healthy
     environment:
       - GATEWAY_URL=http://fastapi-app:8000
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CONSUMER_TOPIC=training-data
+      - CONSUMER_GROUP_ID="lstm" # should be changed according to an input argument on container creation
+      - PRODUCER_TOPIC=model-training
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
       - AWS_ACCESS_KEY_ID=minioadmin
@@ -117,35 +162,44 @@ services:
     networks:
       - app-network
 
-  # 🔮 Inference Container
+  # Inference Container (consumer/producer)
   inference:
     build: 
       context: ./inference_container
       dockerfile: Dockerfile
     depends_on:
-      train:
-        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
     environment:
       - GATEWAY_URL=http://fastapi-app:8000
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CONSUMER_TOPIC_0=inference-data
+      - CONSUMER_TOPIC_1=model-training
+      - CONSUMER_GROUP_ID=batch-forecasting
+      - PRODUCER_TOPIC=performance-eval
     networks:
       - app-network
 
   
   # Evaluation Service
   evaluator:
-    build: ./eval_container # Builds the image from the 'client' folder
+    build: ./eval_container
     ports:
       - "8030:8030"
     environment:
-      # This is the crucial part: The client connects to the 'gateway' service by its name.
-      - GATEWAY_URL=http://gateway:8000
+      - GATEWAY_URL=http://fastapi-app:8000
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CONSUMER_TOPIC_0=inference-data
+      - CONSUMER_TOPIC_1=performance-eval
+      - CONSUMER_GROUP_ID=evaluator
+      - PRODUCER_TOPIC=eval-output
     depends_on:
-      inference:
-        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
     networks:
       - app-network
 

@@ -31,6 +31,7 @@ def post_file(fastapi_url: str, bucket_name: str, object_name: str, file_content
         # Print the success response from the server
         print("Upload successful!")
         print("Server response:", response.json())
+        return True
 
     except requests.exceptions.RequestException as e:
         print(f"An error occurred during upload: {e}")
