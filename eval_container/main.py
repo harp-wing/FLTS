@@ -78,6 +78,7 @@ def message_handler(message_queue: queue.Queue):
                         
                         # Extract model information from object key or metadata
                         model_name = object_key.split('_')[0] if '_' in object_key else "Unknown"
+                        print(model_name)
                         
                         # Store prediction with metadata
                         metadata = {
@@ -282,31 +283,34 @@ async def index(request: Request):
     """
     This is the main endpoint for the application
     """
-    # Get the latest prediction data
-    predictions = prediction_store.get_predictions()
-    df_pred = predictions["LSTM"]
+
     df_true = truth_store.get_ground_truth()
-    
-    if df_pred is None:
-        # If no predictions available, return a message
-        return templates.TemplateResponse(
-            "index.html",
-            {"request": request, 
-             "title": "Evaluation Dashboard", 
-             "plots": [],
-             "message": "No prediction data available yet. Waiting for inference results..."},
-        )
     
     if df_true is None:
         # If no ground truth available, return a message
         return templates.TemplateResponse(
             "index.html",
             {"request": request, 
-             "title": "Evaluation Dashboard", 
-             "plots": [],
-             "message": "No ground truth data available yet. Waiting for ground truth data..."},
+            "title": "Evaluation Dashboard", 
+            "plots": [],
+            "message": "No ground truth data available yet. Waiting for ground truth data..."},
         )
     
+    predictions = prediction_store.get_predictions()
+
+    if not predictions:
+        # If no predictions available, return a message
+        return templates.TemplateResponse(
+            "index.html",
+            {"request": request, 
+            "title": "Evaluation Dashboard", 
+            "plots": [],
+            "message": "No prediction data available yet. Waiting for inference results..."},
+        )  
+    
+    key = list(predictions.keys())[0]
+    df_pred = predictions[key]
+
     # Ensure ground truth data is aligned with prediction data
     df_true_aligned = df_true.iloc[:df_pred.shape[0], :]
 

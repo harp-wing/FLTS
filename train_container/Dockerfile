@@ -36,9 +36,6 @@ COPY . .
 # Pre-create the cache directory and set ownership.
 RUN chown -R appuser:appuser /app
 
-# --- REMOVED: The USER instruction is no longer needed here ---
-# USER appuser
-
 # Expose the port.
 EXPOSE 5005
 

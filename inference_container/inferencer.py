@@ -30,7 +30,7 @@ class Inferencer:
         self.current_model = None
         self.current_scaler: Union[MinMaxScaler, StandardScaler, None] = None
         self.current_experiment_name = "Default"
-        self.current_run_name = "LSTM" # Default or configurable
+        self.current_run_name = "" # Default or configurable
 
     def load_model(self, experiment_name: str, run_name: str, sort: str="Recent"):
         print(f"Attempting to load model for experiment: {experiment_name}, run: {run_name}")
@@ -56,8 +56,7 @@ class Inferencer:
             run_id = runs_df.loc[0, 'run_id']
             print(f"Found run with ID: {run_id}")
 
-            artifact_path = "model"
-            model_uri = f"runs:/{run_id}/{artifact_path}"
+            model_uri = f"runs:/{run_id}/{run_name}"
 
             print(f"Loading model from: {model_uri}")
             model = mlflow.pyfunc.load_model(model_uri)

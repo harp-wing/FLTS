@@ -1,30 +1,20 @@
 # docker-compose.yaml
 
 services:
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.6.1
-    container_name: zookeeper
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    ports:
-      - "2181:2181"
-    networks:
-      - app-network
-
   kafka:
-    image: confluentinc/cp-kafka:7.6.1
+    image: apache/kafka:3.9.1
     container_name: kafka
-    depends_on:
-      - zookeeper
     ports:
       - "9092:9092" # For communication between containers on the same network
       - "9093:9093" # For communication from the host machine
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_PROCESS_ROLES: "broker, controller"
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://localhost:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
     healthcheck:
@@ -90,7 +80,7 @@ services:
     ports:
       - "5000:5000"
     environment:
-      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9009
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
     depends_on:
@@ -103,7 +93,7 @@ services:
     command: >
       sh -c "
       echo 'Attempting to create MinIO bucket...' &&
-      awslocal --endpoint-url=http://minio:9000 s3 mb s3://mlflow || true &&
+      awslocal --endpoint-url=http://minio:9009 s3 mb s3://mlflow || true &&
       echo 'Bucket check complete. Starting MLflow server...' &&
       mlflow server
       --backend-store-uri postgresql://mlflow:mlflow@postgres/mlflow
@@ -113,7 +103,7 @@ services:
       "
 
   # EDA Service
-  data_analyzer:
+  eda:
     build: ./eda_container
     ports:
       - "8010:8010"
@@ -126,8 +116,10 @@ services:
 
 
   # Preprocessing Service (Producer)
-  preprocesser:
-    build: ./preprocessing_container
+  preprocess:
+    build: ./preprocess_container
+    ports:
+      - "8020:8020"
     environment:
       - GATEWAY_URL=http://fastapi-app:8000
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
@@ -144,6 +136,8 @@ services:
   # Training Container (consumer/producer)
   train:
     build: ./train_container
+    ports:
+      - "8021:8021"
     depends_on:
       mlflow:
         condition: service_started
@@ -159,14 +153,35 @@ services:
       - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
+
+      - MODEL_TYPE=TETS
+      - TRAIN_TEST_SPLIT=0.8
+      - INPUT_SEQ_LEN=10
+      - OUTPUT_SEQ_LEN=1
+      
+      - HIDDEN_SIZE=128
+      - NUM_LAYERS=4
+      - MODEL_DIM=128
+      - NUM_HEADS=8
+      - FEEDFORWARD_DIM=512
+      - DROPOUT=0.1
+      - LAYER_ARCHITECTURE=[32, 64, 128, 256]
+      - KERNEL_SIZE=2
+
+      - BATCH_SIZE=32
+      - EPOCHS=50
+      - EARLY_STOPPING=True
+      - PATIENCE=30
+      - LEARNING_RATE=0.001
+
     networks:
       - app-network
 
   # Inference Container (consumer/producer)
   inference:
-    build: 
-      context: ./inference_container
-      dockerfile: Dockerfile
+    build: ./inference_container
+    ports:
+      - "8022:8022"
     depends_on:
       kafka:
         condition: service_healthy
@@ -186,7 +201,7 @@ services:
 
   
   # Evaluation Service
-  evaluator:
+  eval:
     build: ./eval_container
     ports:
       - "8030:8030"
