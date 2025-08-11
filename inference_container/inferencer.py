@@ -186,7 +186,7 @@ class Inferencer:
         content_bytes = parquet_buffer.getvalue()
 
         try:
-            object_key = f"{MODEL_NAME}_{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}"
+            object_key = f"{MODEL_NAME}_{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}.parquet"
             post_file(self.gateway_url, "predictions", object_key, content_bytes)
             print("✅ Predictions pushed to MinIO")
 

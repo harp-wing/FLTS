@@ -186,7 +186,7 @@ def check_uniform(df: pd.DataFrame) -> pd.Timedelta:
     if percentage_most_common < 75:
         print(f"Most common frequency accounts for {percentage_most_common:.2f}% of the time steps.")
         print('Warning: sampling frequency is highly irregular. Resampling is strongly recommended')
-    elif percentage_most_common < 90:
+    elif percentage_most_common < 98:
         print(f"Most common frequency accounts for {percentage_most_common:.2f}% of the time steps.")
         print('Warning: sampling frequency is irregular. Resampling is recommended')
 

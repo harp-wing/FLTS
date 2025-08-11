@@ -1,9 +1,5 @@
 # predict_container/main.py
-import numpy as np
-import mlflow # type: ignore
-import io
 from client_utils import get_file, post_file
-from data_utils import window_data, check_uniform, time_to_feature, subset_scaler
 from kafka_utils import create_producer, create_consumer, produce_message, consume_messages, publish_error
 from inferencer import Inferencer
 import os
@@ -13,7 +9,6 @@ import queue
 import threading
 import time
 import pyarrow.parquet as pq
-from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler # type: ignore
 
 # --- Environment Variables ---
 GATEWAY_URL = os.environ.get("GATEWAY_URL")

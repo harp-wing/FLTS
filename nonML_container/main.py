@@ -7,9 +7,11 @@ import mflow # type: ignore
 import mlflow.statsforecast # type: ignore
 import mlflow.prophet # type: ignore
 import pandas as pd
+from pandas.tseries.frequencies import to_offset
 import pyarrow.parquet as pq
 from typing import List
 from client_utils import get_file
+from data_utils import check_uniform
 from kafka_utils import create_producer, create_consumer, produce_message, consume_messages, publish_error
 from prophet import Prophet
 from prophet.diagnostics import cross_validation, performance_metrics
@@ -131,15 +133,26 @@ def main(df: pd.DataFrame, experiment_name: str="NonML"):
             mlflow.log_param("model_name", "Prophet")
             
         elif MODEL_TYPE in ["AUTOARIMA", "AUTOETS", "AUTOTBATS"]:
+            DOWNSAMPLING = env_var("DOWNSAMPLING")
+            SEASON_LENGTH = env_var("SEASON_LENGTH")
+
+            timedelta = check_uniform(df)
+            offset = to_offset(timedelta).freqstr
+
+            if DOWNSAMPLING != "0":
+                ds_df = df.copy().resample(DOWNSAMPLING).mean()
+            else:
+                ds_df = df.copy()
+
             models_dict = {
-                "AUTOARIMA": [AutoARIMA(season_length=720)], # season_length is an example, should be dynamic
+                "AUTOARIMA": [AutoARIMA(season_length=720)],
                 "AUTOETS": [AutoETS(season_length=720)],
                 "AUTOTBATS": [AutoTBATS(season_length=[720, 5040, 262980])],
             }
             
             sf = StatsForecast(
                 models=models_dict[MODEL_TYPE],
-                freq='D' # Frequency is an example, should be dynamic
+                freq= # Frequency is an example, should be dynamic
             )
             
             # Fit the model

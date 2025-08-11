@@ -45,7 +45,7 @@ services:
   # MinIO Service
   minio:
     image: minio/minio:latest
-    container_name: minio_storage_service
+    container_name: minio
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -147,7 +147,7 @@ services:
       - GATEWAY_URL=http://fastapi-app:8000
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - CONSUMER_TOPIC=training-data
-      - CONSUMER_GROUP_ID="lstm" # should be changed according to an input argument on container creation
+      - CONSUMER_GROUP_ID=train # should be changed according to an input argument on container creation
       - PRODUCER_TOPIC=model-training
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
@@ -177,11 +177,33 @@ services:
     networks:
       - app-network
 
+  # nonml:
+  #   build: ./nonML_container
+  #   ports:
+  #     - "8022:8022"
+  #   depends_on:
+  #     kafka:
+  #       condition: service_healthy
+  #   environment:
+  #     - GATEWAY_URL=http://fastapi-app:8000
+  #     - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+  #     - MLFLOW_TRACKING_URI=http://mlflow:5000
+  #     - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+  #     - CONSUMER_TOPIC=training-data
+  #     - CONSUMER_GROUP_ID=nonml
+  #     - PRODUCER_TOPIC=model-training
+
+  #     - DOWNSAMPLING=0 # 0 for original periodicity
+  #     - SEASON_LENGTH=1D # Recommend smallest relevant seasonality
+
+  #   networks:
+  #     - app-network
+
   # Inference Container (consumer/producer)
   inference:
     build: ./inference_container
     ports:
-      - "8022:8022"
+      - "8023:8023"
     depends_on:
       kafka:
         condition: service_healthy
@@ -217,6 +239,118 @@ services:
         condition: service_healthy
     networks:
       - app-network
+  
+
+  # Postgres for Superset Metadata
+  superset-postgres:
+    image: postgres:13
+    container_name: superset_postgres
+    environment:
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: superset
+      POSTGRES_DB: superset
+    command: >
+      sh -c "
+      psql -U superset -c 'CREATE DATABASE hive_metastore;' || true &&
+      docker-entrypoint.sh postgres
+      "
+    ports:
+      - "5433:5432"
+    volumes:
+      - superset_postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset -d superset"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Hive Metastore for Trino
+  hive-metastore:
+    build: ./hive
+    container_name: hive-metastore
+    environment:
+      - SERVICE_NAME=metastore
+      - HIVE_METASTORE_HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+      - HIVE_METASTORE_WAREHOUSE_DIR=s3a://warehouse/
+    volumes:
+      - ./hive/conf/hive-site.xml:/opt/hive/conf/hive-site.xml
+      - ./hadoop/conf:/opt/hadoop/etc/hadoop
+    ports:
+      - "9083:9083"
+    networks:
+      - app-network
+    depends_on:
+      superset-postgres:
+        condition: service_healthy
+
+  # Trino Coordinator
+  trino: # SQLAlchemy URI: trino://admin@trino:8080/minio
+    image: trinodb/trino:463
+    container_name: trino_coordinator
+    ports:
+      - "8080:8080"
+    environment:
+      - TRINO_CATALOGS_DIR=/trino/etc/catalog
+    volumes:
+      - ./trino/etc:/etc/trino:ro
+      - ./hadoop/conf/core-site.xml:/etc/hadoop/conf/core-site.xml:ro
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      - minio
+      - hive-metastore
+
+  # Redis for Superset caching
+  redis:
+    image: redis:7-alpine
+    container_name: superset_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Apache Superset
+  superset:
+    build: .\superset
+    container_name: apache_superset
+    ports:
+      - "8088:8088"
+    environment:
+      - SUPERSET_SECRET_KEY=your-secret-key-here-change-this
+      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://superset:superset@superset-postgres:5432/superset
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - superset_home:/app/superset_home
+      - ./superset/superset_config.py:/app/superset_config.py:ro
+    networks:
+      - app-network
+    depends_on:
+      superset-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      trino:
+        condition: service_healthy
+    command: >
+      sh -c "
+      superset fab create-admin --username admin --firstname Admin --lastname User --email admin@superset.com --password admin &&
+      superset db upgrade &&
+      superset init &&
+      superset run -h 0.0.0.0 -p 8088 --with-threads --reload --debugger
+      "
 
 
 # Define the network
@@ -226,6 +360,7 @@ networks:
 
 volumes:
   minio_data:
-  # postgres_data:
+  superset_postgres_data:
+  superset_home:
 
   
