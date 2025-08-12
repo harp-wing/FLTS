@@ -227,6 +227,8 @@ def main(df, experiment_name: str="Default"):
                 registered_model_name=None,
                 code_paths=["models.py"]
             )
+            print("✅ Model logged to MLflow")
+
             message = {
                 "operation": f"Trained: {MODEL_TYPE}",
                 "status": "SUCCESS",
@@ -244,8 +246,6 @@ def main(df, experiment_name: str="Default"):
                 e,
                 MODEL_TYPE
             )
-
-        print("✅ Model logged to MLflow")
 
 
 message_queue = queue.Queue()

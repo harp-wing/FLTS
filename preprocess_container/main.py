@@ -3,6 +3,7 @@ from data_utils import *
 import io
 import pickle
 import traceback
+from druid_utils import DruidIngester
 from client_utils import get_file, post_file
 from kafka_utils import create_producer, produce_message, publish_error
 import pyarrow as pa  # type: ignore
@@ -27,6 +28,8 @@ test_file_content = get_file(FASTAPI_URL, INPUT_BUCKET, TEST_OBJECT_NAME)
 # ------- Preprocess Data --------
 #----------------------------------
 
+druid = DruidIngester()
+
 df = read_data(file_content, IDENTIFIER)
 df = handle_nans(df)
 df, scaler = scale_data(df)
@@ -35,10 +38,18 @@ df = time_to_feature(df)
 
 test_df = read_data(test_file_content)
 test_df = handle_nans(test_df)
+
+druid_df = test_df.reset_index(names="time")
+task_id = druid.ingest_dataframe(druid_df, f"{IDENTIFIER}_test", "time")
+if task_id:
+    print(f"Data ingested successfully. Task ID: {task_id}")
+else:
+    print("Failed to ingest data")
+
 test_df, _ = scale_data(test_df, scale=scaler)
 test_df = time_to_feature(test_df)
 
-print(f"df: {df}, test_df: {test_df}")
+print(f"df: {df.head(3)}, test_df: {test_df.head(3)}")
 
 
 #----------------------------------

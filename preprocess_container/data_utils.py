@@ -80,7 +80,7 @@ def select_numeric(df: pd.DataFrame) -> pd.DataFrame:
 
 def handle_nans(df: pd.DataFrame, threshold: float = 0.33, window: int = 2, no_drop: bool = True) -> pd.DataFrame:
     """
-    Handle NaN values in the DaSaFrame by dropping rows with too many NaNs.
+    Handle NaN values in the DataFrame by dropping rows with too many NaNs.
     Threshold is the highest percentage of NaNs allowed in a row.
     Rows with more than this percentage of NaNs will be dropped.
     Remaining NaNs will be filled by KNN imputation.

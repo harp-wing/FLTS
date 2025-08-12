@@ -7,14 +7,13 @@ import pyarrow.parquet as pq
 import pyarrow as pa
 import mlflow # type: ignore
 import io
+from druid_utils import DruidIngester
 from typing import Union
 from sklearn.preprocessing import MinMaxScaler, StandardScaler # type: ignore
 
 # Constants - These can remain here if they are only used by the service
 TIME_FEATURES = ["min_of_day", "day_of_week", "day_of_year"]
 TIME_FEATURES = [f"{feature}_sin" for feature in TIME_FEATURES] + [f"{feature}_cos" for feature in TIME_FEATURES]
-MODEL_NAME = "LSTM" # This could be configurable or extracted from MLflow run
-OUTPUT_SEQ_LEN = 1 # This could be configurable or extracted from MLflow run
 SAMPLE_IDX = 0
 INFERENCE_LENGTH = 720
 
@@ -27,6 +26,7 @@ class Inferencer:
         self.dlq_topic = dlq_topic
         self.output_topic = output_topic
         self.df = None
+        self.output_seq_len = 0
         self.current_model = None
         self.current_scaler: Union[MinMaxScaler, StandardScaler, None] = None
         self.current_experiment_name = "Default"
@@ -53,7 +53,9 @@ class Inferencer:
             if runs_df.empty:
                 raise Exception(f"No runs found for experiment '{experiment_name}' with run name '{run_name}'.")
 
-            run_id = runs_df.loc[0, 'run_id']
+            run_id = runs_df.loc[0, "run_id"]
+            print(runs_df.columns)
+            self.output_seq_len = int(runs_df.loc[0, "params.output_sequence_length"])
             print(f"Found run with ID: {run_id}")
 
             model_uri = f"runs:/{run_id}/{run_name}"
@@ -126,7 +128,7 @@ class Inferencer:
             while step < INFERENCE_LENGTH:
                 multi_step_pred = self.current_model.predict(current_sequence.cpu().numpy())
                 remaining_steps = INFERENCE_LENGTH - step
-                steps_to_use = min(OUTPUT_SEQ_LEN, remaining_steps)
+                steps_to_use = min(self.output_seq_len, remaining_steps)
 
                 for i in range(steps_to_use):
                     absolute_step = step + i
@@ -177,8 +179,17 @@ class Inferencer:
         print(f"- Used actual future values for first {min(available_future_steps, INFERENCE_LENGTH)} steps")
         if INFERENCE_LENGTH > available_future_steps:
             print(f"- Switched to recursive mode after step {available_future_steps}")
-        print(f"- Model predicts {OUTPUT_SEQ_LEN} step(s) at a time")
+        print(f"- Model predicts {self.output_seq_len} step(s) at a time")
         print(f"- Total predictions generated: {df_transformed_predictions.shape[0]}")
+
+        druid = DruidIngester()
+        druid_df = df_transformed_predictions.reset_index(names="time")
+        task_id = druid.ingest_dataframe(druid_df, f"{self.current_run_name}", "time")
+        if task_id:
+            print(f"Data ingested successfully. Task ID: {task_id}")
+        else:
+            print("Failed to ingest data")
+
 
         output_table = pa.Table.from_pandas(df_transformed_predictions)
         parquet_buffer = io.BytesIO()
@@ -186,7 +197,7 @@ class Inferencer:
         content_bytes = parquet_buffer.getvalue()
 
         try:
-            object_key = f"{MODEL_NAME}_{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}.parquet"
+            object_key = f"{self.current_run_name}_{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}.parquet"
             post_file(self.gateway_url, "predictions", object_key, content_bytes)
             print("✅ Predictions pushed to MinIO")
 
@@ -205,5 +216,5 @@ class Inferencer:
                 "Push Predictions",
                 "Failure",
                 str(e),
-                {"model_name": MODEL_NAME, "predictions_shape": df_transformed_predictions.shape}
+                {"model_name": self.current_run_name, "predictions_shape": df_transformed_predictions.shape}
             )
