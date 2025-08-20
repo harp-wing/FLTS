@@ -2,33 +2,50 @@
 import os
 import queue
 import threading
-import datetime
-import mflow # type: ignore
-import mlflow.statsforecast # type: ignore
-import mlflow.prophet # type: ignore
+import mlflow # type: ignore
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
 import pyarrow.parquet as pq
-from typing import List
+from typing import Any, List, Tuple, Optional
 from client_utils import get_file
-from data_utils import check_uniform
+from data_utils import check_uniform, subset_scaler
 from kafka_utils import create_producer, create_consumer, produce_message, consume_messages, publish_error
-from prophet import Prophet
-from prophet.diagnostics import cross_validation, performance_metrics
-from statsforecast import StatsForecast
-from statsforecast.models import (                                                                                              # type: ignore
-    AutoARIMA, # AutoRegressive Integrated Moving Average
-    AutoETS, # Exponential Smoothing
-    AutoTBATS # Trigonometric seasonality, Box-Cox transformation, ARMA errors, Trend components, Seasonal components
-    # Consider also AutoMFLES
-)
+from models import ProphetMultiFeatureModel, StatsForecastMultiFeatureModel
 
-def env_var(var: str) -> str:
-    temp = os.environ.get(var)
+def env_var(var: str, default: Any=None) -> str:
+    temp = os.environ.get(var, default)
     if temp is None:
         raise TypeError(f"Environment variable, {var}, not defined")
     else:
         return temp
+    
+def estimate_season_length(td: pd.Timedelta) -> int:
+    """
+    Infer smallest likely season length (in steps) greater than the data periodicity.
+    
+    Examples:
+        1 min  -> 1440 (daily seasonality)
+        5 min  -> 288  (daily seasonality)
+        1 hour -> 24   (daily seasonality)
+        1 day  -> 7    (weekly seasonality)
+        1 week -> 52   (yearly seasonality)
+    """
+    seconds = td.total_seconds()
+
+    # Define "likely" real-world seasonal cycles in seconds
+    cycles = {
+        "daily":   24 * 3600,
+        "weekly":  7  * 24 * 3600,
+        "yearly":  365 * 24 * 3600
+    }
+
+    # Find the smallest cycle > periodicity
+    for name, cycle_seconds in cycles.items():
+        if cycle_seconds > seconds:
+            return int(round(cycle_seconds / seconds))
+
+    # If the periodicity is larger than yearly, default to 1
+    return 1
 
 def callback(message):
     print(f"\nConsumer received message with key: {message.key} and added to queue.")
@@ -72,98 +89,120 @@ def message_handler():
 
             except Exception as e:
                 print(f"NonML worker error during model training for {object_key}: {e}")
+                import traceback
+                traceback.print_exc()
         else:
             print(f"NonML worker WARN: Message received without complete claim check details or unknown operation: {claim_check}")
 
         # Mark the task as done after processing
         message_queue.task_done()
 
-def main(df: pd.DataFrame, experiment_name: str="NonML"):
-    OUTPUT_SEQ_LEN: int = int(env_var("OUTPUT_SEQ_LEN"))
+def main(df: pd.DataFrame, experiment_name: str = "NonML"):
+    OUTPUT_SEQ_LEN: int = int(os.environ.get("OUTPUT_SEQ_LEN", "1"))
     MODEL_TYPE: str = env_var("MODEL_TYPE")
-    
-    config = {
-        "horizon": OUTPUT_SEQ_LEN,
-        "model_type": MODEL_TYPE,
-    }
+
+    TIME_FEATURES = ["min_of_day", "day_of_week", "day_of_year"]
+    TIME_FEATURES = [f"{feature}_sin" for feature in TIME_FEATURES] + [f"{feature}_cos" for feature in TIME_FEATURES]
     
     # === MLflow Logging ===
     mlflow.set_experiment(experiment_name)
-    mlflow.autolog()
 
-    now = datetime.datetime.now()
-    timestamp = now.strftime("%Y-%m-%d_%H:%M:%S")
-    run_name = f"{MODEL_TYPE}_{timestamp}"
+    run_name = MODEL_TYPE
 
     with mlflow.start_run(run_name=run_name, log_system_metrics=True):
-        mlflow.log_params(config)
+        # mlflow.autolog()
+        # scikit-learn==1.7.0
+        # statsmodels==0.14.4
 
-        # Prepare data for statsforecast and prophet
-        # Statsforecast expects columns 'ds' (datestamp), 'y' (value), and 'unique_id'
-        # Prophet expects columns 'ds' and 'y'
-        
-        df.rename(columns={'y_col_name': 'y'}, inplace=True)
-        df['unique_id'] = "1"  # Statsforecast requires a unique_id for each time series
-        df.index.rename('ds', inplace=True)
+        # Prepare data
+        timedelta = check_uniform(df)
+        offset = to_offset(timedelta).freqstr # type: ignore
+
+        df["unique_id"] = "1"
+        df.index.rename("ds", inplace=True)
         df = df.reset_index()
 
+        # REDUCE FEATURES HERE
+        # ex:
+        # scaler = subset_scaler(scaler, df.columns.to_list(), trims)
+
+        # Get feature columns (excluding ds and unique_id)
+        feature_columns = [col for col in df.columns if col not in (["ds", "unique_id"]+TIME_FEATURES)]
+        
+        print(f"Feature columns: {feature_columns}")
+        print(f"Features: {df.columns.difference(feature_columns, sort=False).to_list()}")
+
         if MODEL_TYPE == "PROPHET":
-            # Prophet requires specific column names 'ds' and 'y'
-            # It also handles seasonality, holidays, and trend automatically
-            prophet_df = df.rename(columns={"ds": "ds", "y": "y"})
-            
-            # Additional Prophet parameters from environment variables
-            SEASONALITY_MODE = os.environ.get("SEASONALITY_MODE", "additive")
-            config.update({"seasonality_mode": SEASONALITY_MODE})
-            
-            model = Prophet(seasonality_mode=SEASONALITY_MODE)
-            model.fit(prophet_df)
-            
-            future = model.make_future_dataframe(periods=OUTPUT_SEQ_LEN)
-            forecast = model.predict(future)
-            
-            # Log model and results to MLflow
-            mlflow.prophet.log_model(model, "prophet_model")
-            
-            # Cross-validation and performance metrics can be logged as well
-            cv_results = cross_validation(model, initial='730 days', period='180 days', horizon='365 days')
-            df_p = performance_metrics(cv_results)
-            mlflow.log_metric("prophet_mae", df_p['mae'].mean())
-            
-            mlflow.log_param("model_name", "Prophet")
-            
-        elif MODEL_TYPE in ["AUTOARIMA", "AUTOETS", "AUTOTBATS"]:
-            DOWNSAMPLING = env_var("DOWNSAMPLING")
-            SEASON_LENGTH = env_var("SEASON_LENGTH")
-
-            timedelta = check_uniform(df)
-            offset = to_offset(timedelta).freqstr
-
-            if DOWNSAMPLING != "0":
-                ds_df = df.copy().resample(DOWNSAMPLING).mean()
-            else:
-                ds_df = df.copy()
-
-            models_dict = {
-                "AUTOARIMA": [AutoARIMA(season_length=720)],
-                "AUTOETS": [AutoETS(season_length=720)],
-                "AUTOTBATS": [AutoTBATS(season_length=[720, 5040, 262980])],
+            # Collect Prophet parameters
+            prophet_params = {
+                "growth": os.environ.get("GROWTH", "linear"),
+                "n_changepoints": int(os.environ.get("N_CHANGEPOINTS", "25")),
+                "changepoint_range": float(os.environ.get("CHANGEPOINT_RANGE", "0.8")),
+                "yearly_seasonality": os.environ.get("YEARLY_SEASONALITY", "auto"),
+                "weekly_seasonality": os.environ.get("WEEKLY_SEASONALITY", "auto"),
+                "daily_seasonality": os.environ.get("DAILY_SEASONALITY", "auto"),
+                "seasonality_mode": os.environ.get("SEASONALITY_MODE", "additive"),
+                "seasonality_prior_scale": float(os.environ.get("SEASONALITY_PRIOR_SCALE", "10")),
+                "holidays_prior_scale": float(os.environ.get("HOLIDAYS_PRIOR_SCALE", "10")),
+                "changepoint_prior_scale": float(os.environ.get("CHANGEPOINT_PRIOR_SCALE", "0.05")),
+                "country": os.environ.get("COUNTRY", "US")
             }
             
-            sf = StatsForecast(
-                models=models_dict[MODEL_TYPE],
-                freq= # Frequency is an example, should be dynamic
+            # Log all Prophet parameters
+            mlflow.log_params({f"{k}": v for k, v in prophet_params.items()})
+            
+            # Create and fit multi-feature Prophet model
+            multi_prophet = ProphetMultiFeatureModel()
+            multi_prophet.fit(df, feature_columns, prophet_params)
+            
+            # Log the bundled model
+            mlflow.pyfunc.log_model(
+                name=MODEL_TYPE,
+                python_model=multi_prophet,
+                input_example=df[feature_columns].head(1), # check
+                code_paths=["models.py"]
             )
             
-            # Fit the model
-            sf.fit(df)
-            
-            # Make the forecast
-            forecast_df = sf.predict(h=OUTPUT_SEQ_LEN)
+            # Perform cross-validation and log metrics
+            cv_metrics = multi_prophet.get_cross_validation_metrics(df, offset)
+            for metric_name, metric_value in cv_metrics.items():
+                if metric_value is not None:
+                    mlflow.log_metric(metric_name, metric_value)
+                
+        elif MODEL_TYPE in ["AUTOARIMA", "AUTOETS", "AUTOTHETA", "AUTOMFLES", "AUTOTBATS"]:
+            DOWNSAMPLING = os.environ.get("DOWNSAMPLING", "0")
+            sl_env = os.environ.get("SEASON_LENGTH", "0")
+            sl: List[int] = [int(x) for x in sl_env.strip("[]").split(",")]
 
-            # Log model and results to MLflow
-            mlflow.statsforecast.log_model(sf, "statsforecast_model")
-            mlflow.log_param("model_name", MODEL_TYPE)
+            if sl[0] == 0:
+                SEASON_LENGTH: List[int] = [estimate_season_length(timedelta)]
+            else:
+                SEASON_LENGTH = sl
+
+            # Collect StatsForecast parameters
+            statsforecast_params = {
+                "model_type": MODEL_TYPE,
+                "output_sequence_length": OUTPUT_SEQ_LEN,
+                "season_length": SEASON_LENGTH,
+                "downsampling": DOWNSAMPLING,
+                "output_sequence_length": OUTPUT_SEQ_LEN,
+                "frequency": offset,
+            }
+            
+            # Log all StatsForecast parameters
+            mlflow.log_params({f"{k}": v for k, v in statsforecast_params.items()})
+            
+            # Create and fit multi-feature StatsForecast model
+            multi_statsforecast = StatsForecastMultiFeatureModel()
+            multi_statsforecast.fit(df, feature_columns, statsforecast_params, TIME_FEATURES)
+            
+            # Log the bundled model
+            mlflow.pyfunc.log_model(
+                name=MODEL_TYPE,
+                python_model=multi_statsforecast,
+                # signature=multi_statsforecast.get_signature(),
+                code_paths=["models.py"]
+            )
             
         else:
             raise ValueError(f"{MODEL_TYPE} not supported")
@@ -174,8 +213,6 @@ def main(df: pd.DataFrame, experiment_name: str="NonML"):
             raise TypeError("Environment variable, PRODUCER_TOPIC, not defined")
 
         try:
-            # The MLflow logging for StatsForecast is done in the `if` block,
-            # this section handles the message to Kafka.
             message = {
                 "operation": f"Trained: {MODEL_TYPE}",
                 "status": "SUCCESS",
@@ -200,8 +237,11 @@ message_queue = queue.Queue()
 worker_thread = threading.Thread(target=message_handler, daemon=True)
 worker_thread.start()
 
-consumer = create_consumer(env_var("CONSUMER_TOPIC"), env_var("CONSUMER_GROUP_ID"))
-consume_messages(consumer, callback)
+#debug
+from random import randint
+CONSUMER_GROUP_ID = f"CONSUMER_GROUP_ID{randint(0, 999)}"
+consumer = create_consumer(env_var("CONSUMER_TOPIC"), CONSUMER_GROUP_ID)
 
-# -------------------- Statsforecast Models -------------------
+# consumer = create_consumer(env_var("CONSUMER_TOPIC"), env_var("CONSUMER_GROUP_ID"))
+consume_messages(consumer, callback)
 

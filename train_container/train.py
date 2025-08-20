@@ -170,7 +170,7 @@ def train(model: torch.nn.Module,
             from carbontracker.tracker import CarbonTracker # type: ignore
             cb_tracker = CarbonTracker(epochs=epochs, components="all", verbose=1)
         except ImportError:
-            log(INFO, "CarbonTracker not found. Please install with `pip install carbontracker`.")
+            log(INFO, "CarbonTracker not found.")
 
     for epoch in range(epochs):
         if cb_tracker:

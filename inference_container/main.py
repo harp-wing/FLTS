@@ -8,6 +8,7 @@ import torch
 import queue
 import threading
 import time
+import traceback
 import pyarrow.parquet as pq
 
 # --- Environment Variables ---
@@ -120,6 +121,7 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
 
                     except Exception as e:
                         print(f"Inference worker error fetching, parsing, or during inference for {object_key}: {e}")
+                        traceback.print_exc()
                         publish_error(
                             service.producer,
                             service.dlq_topic,
@@ -151,6 +153,7 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
 
         except Exception as e:
             print(f"Inference worker failed to process message from queue: {e}")
+            traceback.print_exc()
             publish_error(
                 service.producer,
                 service.dlq_topic,

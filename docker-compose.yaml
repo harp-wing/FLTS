@@ -103,16 +103,16 @@ services:
       "
 
   # EDA Service
-  eda:
-    build: ./eda_container
-    ports:
-      - "8010:8010"
-    environment:
-      - GATEWAY_URL=http://fastapi-app:8000
-    depends_on:
-      - fastapi-app
-    networks:
-      - app-network
+  # eda:
+  #   build: ./eda_container
+  #   ports:
+  #     - "8010:8010"
+  #   environment:
+  #     - GATEWAY_URL=http://fastapi-app:8000
+  #   depends_on:
+  #     - fastapi-app
+  #   networks:
+  #     - app-network
 
 
   # Preprocessing Service (Producer)
@@ -135,70 +135,73 @@ services:
       - app-network
     
   # Training Container (consumer/producer)
-  train:
-    build: ./train_container
-    ports:
-      - "8021:8021"
-    depends_on:
-      mlflow:
-        condition: service_started
-      kafka:
-        condition: service_healthy
-    environment:
-      - GATEWAY_URL=http://fastapi-app:8000
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - CONSUMER_TOPIC=training-data
-      - CONSUMER_GROUP_ID=train # should be changed according to an input argument on container creation
-      - PRODUCER_TOPIC=model-training
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
-      - AWS_ACCESS_KEY_ID=minioadmin
-      - AWS_SECRET_ACCESS_KEY=minioadmin
-
-      - MODEL_TYPE=TETS
-      - TRAIN_TEST_SPLIT=0.8
-      - INPUT_SEQ_LEN=10
-      - OUTPUT_SEQ_LEN=1
-      
-      - HIDDEN_SIZE=128
-      - NUM_LAYERS=4
-      - MODEL_DIM=128
-      - NUM_HEADS=8
-      - FEEDFORWARD_DIM=512
-      - DROPOUT=0.1
-      - LAYER_ARCHITECTURE=[32, 64, 128, 256]
-      - KERNEL_SIZE=2
-
-      - BATCH_SIZE=32
-      - EPOCHS=50
-      - EARLY_STOPPING=True
-      - PATIENCE=30
-      - LEARNING_RATE=0.001
-
-    networks:
-      - app-network
-
-  # nonml:
-  #   build: ./nonML_container
+  # train:
+  #   build: ./train_container
   #   ports:
-  #     - "8022:8022"
+  #     - "8021:8021"
   #   depends_on:
+  #     mlflow:
+  #       condition: service_started
   #     kafka:
   #       condition: service_healthy
   #   environment:
   #     - GATEWAY_URL=http://fastapi-app:8000
   #     - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+  #     - CONSUMER_TOPIC=training-data
+  #     - CONSUMER_GROUP_ID=train
+  #     - PRODUCER_TOPIC=model-training
   #     - MLFLOW_TRACKING_URI=http://mlflow:5000
   #     - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
-  #     - CONSUMER_TOPIC=training-data
-  #     - CONSUMER_GROUP_ID=nonml
-  #     - PRODUCER_TOPIC=model-training
+  #     - AWS_ACCESS_KEY_ID=minioadmin
+  #     - AWS_SECRET_ACCESS_KEY=minioadmin
 
-  #     - DOWNSAMPLING=0 # 0 for original periodicity
-  #     - SEASON_LENGTH=1D # Recommend smallest relevant seasonality
+  #     - MODEL_TYPE=TCN
+  #     - TRAIN_TEST_SPLIT=0.8
+  #     - INPUT_SEQ_LEN=10
+  #     - OUTPUT_SEQ_LEN=1
+      
+  #     - HIDDEN_SIZE=128
+  #     - NUM_LAYERS=4
+  #     - MODEL_DIM=128
+  #     - NUM_HEADS=8
+  #     - FEEDFORWARD_DIM=512
+  #     - DROPOUT=0.1
+  #     - LAYER_ARCHITECTURE=[32, 64, 128, 256]
+  #     - KERNEL_SIZE=2
+
+  #     - BATCH_SIZE=32
+  #     - EPOCHS=50
+  #     - EARLY_STOPPING=True
+  #     - PATIENCE=30
+  #     - LEARNING_RATE=0.001
 
   #   networks:
   #     - app-network
+
+  nonml:
+    build: ./nonML_container
+    ports:
+      - "8022:8022"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - GATEWAY_URL=http://fastapi-app:8000
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - CONSUMER_TOPIC=training-data
+      - CONSUMER_GROUP_ID=nonml
+      - PRODUCER_TOPIC=model-training
+
+      - MODEL_TYPE=AUTOMFLES
+      - DOWNSAMPLING=0 # (str) 0 for original periodicity
+      - SEASON_LENGTH=720 # (int) Recommend smallest relevant seasonality
+
+    networks:
+      - app-network
 
   # Inference Container (consumer/producer)
   inference:
@@ -212,6 +215,7 @@ services:
       - GATEWAY_URL=http://fastapi-app:8000
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - TQDM_DISABLE=1 # Disable tqdm progress bars in the logs
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
@@ -223,24 +227,6 @@ services:
       - common
       - app-network
 
-  
-  # Evaluation Service
-  # eval:
-  #   build: ./eval_container
-  #   ports:
-  #     - "8030:8030"
-  #   environment:
-  #     - GATEWAY_URL=http://fastapi-app:8000
-  #     - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-  #     - CONSUMER_TOPIC_0=inference-data
-  #     - CONSUMER_TOPIC_1=performance-eval
-  #     - CONSUMER_GROUP_ID=evaluator
-  #     - PRODUCER_TOPIC=eval-output
-  #   depends_on:
-  #     kafka:
-  #       condition: service_healthy
-  #   networks:
-  #     - app-network
   
   superset-db:
     image: postgres:13

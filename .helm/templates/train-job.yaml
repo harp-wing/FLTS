@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  labels:
+    io.kompose.service: train
+  name: train
+spec:
+  parallelism: {{ .Values.train.job.parallelism }}
+  template:
+    metadata:
+      labels:
+        io.kompose.service: train
+    spec:
+      initContainers:
+        - name: wait-for-kafka
+          image: busybox:1.36
+          command: ['sh', '-c', 'echo Waiting for Kafka...; while ! nc -z {{ .Values.kafka.service.name }} {{ .Values.kafka.service.port }}; do sleep 1; done; echo Kafka is up!']
+      containers:
+        - env:
+            - name: MODEL_TYPE
+              value: {{ .Values.model.type }}
+            {{- if eq .Values.model.type "lstm" }}
+            - name: OUTPUT_SIZE
+              value: {{ .Values.lstm.outputSize }}
+            {{- else if eq .Values.model.type "gru" }}
+            - name: OUTPUT_SIZE
+              value: {{ .Values.gru.outputSize }}
+            {{- end }}
+            
+            - name: CONSUMER_GROUP_ID
+              value: {{ .Values.train.env.consumerGroupId }}
+            - name: CONSUMER_TOPIC
+              value: {{ .Values.train.env.consumerTopic }}
+            - name: PRODUCER_TOPIC
+              value: {{ .Values.train.env.producerTopic }}
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: {{ .Values.train.env.kafkaBootstrapServers }}
+            - name: GATEWAY_URL
+              value: {{ .Values.train.env.gatewayUrl }}
+            - name: AWS_ACCESS_KEY_ID
+              value: {{ .Values.train.env.awsAccessKeyId }}
+            - name: AWS_SECRET_ACCESS_KEY
+              value: {{ .Values.train.env.awsSecretAccessKey }}
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: {{ .Values.train.env.mlflowS3EndpointUrl }}
+            - name: MLFLOW_TRACKING_URI
+              value: {{ .Values.train.env.mlflowTrackingUri }}
+          image: {{ .Values.train.image.repository }}:{{ .Values.train.image.tag }}
+          imagePullPolicy: {{ .Values.train.image.pullPolicy }}
+          name: train
+          ports:
+            - containerPort: 8021
+              protocol: TCP
+      restartPolicy: Always
