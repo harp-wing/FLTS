@@ -1,8 +1,8 @@
 # requirements.txt
 
 numpy==2.2.6
-pandas==2.3.0
-scikit-learn==1.7.0
+pandas==2.3.2
+scikit-learn==1.7.1
 pyarrow==20.0.0
 
 requests==2.32.4

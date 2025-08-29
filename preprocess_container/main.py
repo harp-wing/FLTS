@@ -28,11 +28,13 @@ test_file_content = get_file(FASTAPI_URL, INPUT_BUCKET, TEST_OBJECT_NAME)
 # ------- Preprocess Data --------
 #----------------------------------
 
+SCALER = os.environ.get("SCALER", "StandardScaler")
+
 druid = DruidIngester()
 
 df = read_data(file_content, IDENTIFIER)
 df = handle_nans(df)
-df, scaler = scale_data(df)
+df, scaler = scale_data(df, SCALER)
 # bin_outliers(df)
 df = time_to_feature(df)
 
