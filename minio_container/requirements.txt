@@ -1,5 +1,0 @@
-# requirement.txt
-
-fastapi
-minio
-uvicorn
