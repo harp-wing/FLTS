@@ -125,6 +125,172 @@ affinity: {}
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
+persistence:
+  enabled: true
+
+global:
+  storageClass: "standard"
+  pullPolicy: IfNotPresent
+
+# KAFKA
+kafka:
+  image:
+    repository: apache/kafka
+    tag: "3.9.1"
+  service:
+    port: 9092
+    controllerPort: 9093
+  config:
+    nodeId: 1
+    replicationFactor: 1
+    groupInitialRebalanceDelayMs: 0
+
+# FASTAPI
+fastapi:
+  enabled: true
+  image:
+    repository: fastapi-app
+    tag: "latest"
+  service:
+    port: 8000
+  env:
+    minioFile: ".env.minio"
+
+# MINIO
+minio:
+  image:
+    repository: minio/minio
+    tag: "latest"
+  service:
+    apiPort: 9000
+    consolePort: 9001
+  auth:
+    accessKey: "minioadmin"
+    secretKey: "minioadmin"
+  env:
+    defaultBucket: "dataset"
+  storage:
+    size: "10Gi"
+
+# MLFLOW
+mlflow:
+  enabled: true
+  image:
+    repository: mlflow
+    tag: "latest"
+  service:
+    port: 5000
+  postgres:
+    image:
+      repository: postgres
+      tag: "13"
+    service:
+      port: 5432
+    auth:
+      user: "mlflow"
+      password: "mlflow"
+      database: "mlflow"
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits: 
+        memory: "1Gi"
+        cpu: "500m"
+    storage:
+      size: "5Gi"
+
+# DRUID
+druid:
+  enabled: true
+  image:
+    repository: apache/druid
+    tag: "34.0.0"
+  postgres:
+    image:
+      repository: postgres
+      tag: "latest"
+    auth:
+      user: "druid"
+      password: "FoolishPassword"
+      database: "druid"
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits: 
+        memory: "1Gi"
+        cpu: "500m"
+    storage:
+      size: "5Gi"
+  zookeeper:
+    image:
+      repository: zookeeper
+      tag: "3.5.10"
+  services:
+    coordinator:
+      port: 8081
+    broker:
+      port: 8082
+    historical:
+      enabled: false
+      port: 8083
+    middlemanager:
+      port: 8091
+      peonPorts: "8100-8105"
+    router:
+      port: 8888
+  storage:
+    shared: "20Gi"
+    coordinator: "2Gi"
+    broker: "2Gi"
+    historical: "10Gi"
+    middlemanager: "5Gi"
+    router: "1Gi"
+
+# SUPERSET
+superset:
+  enabled: true
+  image:
+    repository: apache/superset
+    tag: "v5.0.0-dev"
+  service:
+    port: 8088
+  auth:
+    secretKey: "superduperset"
+    adminUsername: "admin"
+    adminPassword: "admin"
+    adminEmail: "admin@superset.com"
+  postgres:
+    image:
+      repository: postgres
+      tag: "13"
+    service:
+      port: 5432
+    auth:
+      user: "superset"
+      password: "superset"
+      database: "superset"
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits: 
+        memory: "1Gi"
+        cpu: "500m"
+    storage:
+      size: "2Gi"
+  storage:
+    size: "2Gi"
+
+# ---------- Pipeline ----------
+
+eda:
+  image:
+    repository: eda
+    tag: "latest"
+  service:
+    port: 8010
 
 preprocess:
   image:
@@ -136,22 +302,26 @@ preprocess:
   job:
     parallelism: 1
     restartPolicy: OnFailure
-  env:
-    gatewayURL: "http://fastapi-app:8000"
-    kafkaBootstrapServers: "kafka:9092"
-    producerTopic0: "training-data"
-    producerTopic1: "inference-data"
+  kafka:
+    topics:
+      training: "training-data"
+      inference: "inference-data"
 
+# Training Job
 train:
+  enabled: false
   image:
     repository: train
     tag: latest
-    pullPolicy: IfNotPresent
   service:
     port: 8021
   job:
     parallelism: 1
     restartPolicy: OnFailure
+  kafka:
+    consumerTopic: "training-data"
+    consumerGroupId: "train"
+    producerTopic: "model-training"
   env:
     consumerGroupId: "train"
     consumerTopic: "training-data"
@@ -162,30 +332,83 @@ train:
     awsSecretAccessKey: minioadmin
     mlflowS3EndpointUrl: "http://minio:9000"
     mlflowTrackingUri: "http://mlflow:5000"
+  resources:
+    requests:
+      memory:
+      cpu: "6000m"
+    limits:
+      memory:
+      cpu: "8000m"
 
-model:
-  type: "lstm" # "gru" | "tcn" | "tts"
+  model:
+    type: "LSTM" # "GRU" | "TETS" | "TCN"
 
-lstm:
-  outputSize: 1
-  hiddenSize: 128
-  numLayers: 4
-  learningRate: 0.001
-  numEpochs: 100
-  earlyStoppingPatience: 10
+    trainTestSplit: 0.8 # percentage of training data to use on training the model vs evaluating it (during training). Use a different set for final performance rating to catch overfitting
+    inputSeqLen: 10 # number of points for the model to use to predict
+    outputSeqLen: 1 # number of points for the model to predict (accuracy suffers exponentially with this). However, recursive inferencing still allows for decent forecast horizons
 
-gru:
-  outputSize: 1
-  hiddenSize: 128
-  numLayers: 4
-  learningRate: 0.001
-  numEpochs: 100
-  earlyStoppingPatience: 10
+    batchSize: 32 # how many points are shown to the model at once, higher = faster but more memory (no effect on accuracy)
+    learningRate: 0.001 # you almost never need to change this, raise if converging but taking forever, lower if struggling to converge
+    numEpochs: 100 # set to a high value and use early stopping, otherwise, check mlflow loss graph for plateau
+    earlyStopping: true # trains until numEpochs is reached or the number of cumulative epochs without improvement in loss exceeds patience
+    patience: 30 # start with a reasonable value and lower if necessary
 
-tcn:
-  #
-  #
+    LSTM:
+      hiddenSize: 128 # Neurons per layer (how "wide" the model is)
+      numLayers: 4 # how "deep" the model is
 
-tts:
-  #
-  #
+    GRU:
+      hiddenSize: 128
+      numLayers: 4
+
+    TETS:
+      modelDim: 128
+      numHeads: 8
+      feedforewardDim: 512
+      dropout: 0.1
+
+    TCN:
+      layerArchitecture: [32, 64, 128, 256]
+      kernelSize: 2
+      dropout: 0.1
+
+  # Non-ML Job
+nonml:
+  enabled: true
+  image:
+    repository: nonml
+    tag: "latest"
+  service:
+    port: 8022
+  kafka:
+    consumerTopic: "training-data"
+    consumerGroupId: "nonml"
+    producerTopic: "model-training"
+  model:
+    type: "AUTOMFLES" # PROPHET | AUTOARIMA | AUTOETS | AUTOTHETA | AUTOMFLES | AUTOTBATS
+    downsampling: 0 # 0 for original periodicity, otherwise pandas compatible time string
+    seasonLength: 720 # integer multiple of periodicity representing most relevant seasonality (recommended smallest relevant seasonality because big numbers get very slow)
+  resources:
+    requests:
+      memory:
+      cpu: "6000m"
+    limits:
+      memory:
+      cpu: "8000m"
+
+# Inference Service
+inference:
+  image:
+    repository: inference
+    tag: "latest"
+  service:
+    port: 8023
+  kafka:
+    consumerTopics:
+      - "inference-data"
+      - "model-training"
+    consumerGroupId: "batch-forecasting"
+    producerTopic: "performance-eval"
+  config:
+    sampleIdx: 0
+    inferenceLength: 4070
