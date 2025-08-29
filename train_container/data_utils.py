@@ -248,7 +248,7 @@ def subset_scaler(original_scaler, original_columns, subset_columns):
 
     Args:
         original_scaler: The scaler object (StandardScaler or MinMaxScaler).
-        original_columns (pd.Index): The .columns attribute from the original DataFrame.
+        original_columns (list): The column names from the original DataFrame.
         subset_columns (list): A list of column names for the new scaler.
 
     Returns:
@@ -258,7 +258,7 @@ def subset_scaler(original_scaler, original_columns, subset_columns):
         return original_scaler
 
     # Find the integer indices of the subset columns
-    subset_indices = [original_columns.get_loc(col) for col in subset_columns]
+    subset_indices = [original_columns.index(col) for col in subset_columns]
 
     # Check scaler type and assign the correct attributes
     if isinstance(original_scaler, StandardScaler):

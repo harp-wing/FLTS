@@ -6,7 +6,7 @@ from typing import Optional
 from datetime import datetime
 
 class DruidIngester:
-    def __init__(self, coordinator_url="http://coordinator:8081"):  # Fixed URL
+    def __init__(self, coordinator_url="http://coordinator:8081"):
         self.coordinator_url = coordinator_url
         self.logger = logging.getLogger(__name__)
     
@@ -25,15 +25,21 @@ class DruidIngester:
             df_copy = df.copy()
             
             print(df.columns)
-            print(timestamp_column and timestamp_column in df.columns)
+            print(df.head(5))
 
             # Handle timestamp column
-            if timestamp_column and timestamp_column in df.columns:
-                df_copy['__time'] = pd.to_datetime(df_copy[timestamp_column]).dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-                if timestamp_column != '__time':
-                    df_copy = df_copy.drop(columns=[timestamp_column])
-            else:
-                df_copy['__time'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            if not (timestamp_column and timestamp_column in df.columns):
+                print("No timestamp column given, assuming index represents time")
+                try:
+                    df_copy.reset_index(names="time")
+                    timestamp_column = "time"
+                except Exception as e:
+                    self.logger.error(f"Error parsing time: {str(e)}")
+                    print(f"❌ Error parsing time: {str(e)}")
+
+            df_copy['__time'] = pd.to_datetime(df_copy[timestamp_column]).dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            if timestamp_column != '__time':
+                df_copy = df_copy.drop(columns=[timestamp_column])
             
             # Convert NaN to None
             df_copy = df_copy.where(pd.notnull(df_copy), None)
@@ -45,6 +51,8 @@ class DruidIngester:
             timestamps = pd.to_datetime([record['__time'] for record in records])
             min_time = timestamps.min().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
             max_time = (timestamps.max() + pd.Timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            print(f"Min time: {min_time}, Max time: {max_time}")
+
             
             # Create ingestion spec with overwrite support
             ingestion_spec = self._create_ingestion_spec(

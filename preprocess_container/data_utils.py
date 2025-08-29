@@ -80,7 +80,7 @@ def select_numeric(df: pd.DataFrame) -> pd.DataFrame:
 
 def handle_nans(df: pd.DataFrame, threshold: float = 0.33, window: int = 2, no_drop: bool = True) -> pd.DataFrame:
     """
-    Handle NaN values in the DataFrame by dropping rows with too many NaNs.
+    Handle NaN values in the DaSaFrame by dropping rows with too many NaNs.
     Threshold is the highest percentage of NaNs allowed in a row.
     Rows with more than this percentage of NaNs will be dropped.
     Remaining NaNs will be filled by KNN imputation.
@@ -248,7 +248,7 @@ def subset_scaler(original_scaler, original_columns, subset_columns):
 
     Args:
         original_scaler: The scaler object (StandardScaler or MinMaxScaler).
-        original_columns (pd.Index): The .columns attribute from the original DataFrame.
+        original_columns (list): The column names from the original DataFrame.
         subset_columns (list): A list of column names for the new scaler.
 
     Returns:
@@ -258,7 +258,7 @@ def subset_scaler(original_scaler, original_columns, subset_columns):
         return original_scaler
 
     # Find the integer indices of the subset columns
-    subset_indices = [original_columns.get_loc(col) for col in subset_columns]
+    subset_indices = [original_columns.index(col) for col in subset_columns]
 
     # Check scaler type and assign the correct attributes
     if isinstance(original_scaler, StandardScaler):

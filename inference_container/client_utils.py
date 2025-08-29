@@ -9,10 +9,10 @@ def post_file(fastapi_url: str, bucket_name: str, object_name: str, file_content
 
     print(f"Preparing to upload {len(file_content)} bytes of data.")
 
-    # 2. Construct the full URL for the upload endpoint.
+    # Construct the full URL for the upload endpoint.
     url = f"{fastapi_url}/upload/{bucket_name}/{object_name}"
     
-    # 3. Set the content type header.
+    # Set the content type header.
     # This tells the server what kind of data you are sending.
     headers = {
         'Content-Type': 'application/octet-stream'
@@ -20,9 +20,8 @@ def post_file(fastapi_url: str, bucket_name: str, object_name: str, file_content
 
     print(f"Sending POST request to: {url}")
     try:
-        # 4. Send the POST request.
-        # The 'data' parameter takes the bytes from our variable and places
-        # them in the request body.
+        # Send the POST request.
+        # The 'data' parameter takes the bytes from our variable and places them in the request body.
         response = requests.post(url, data=file_content, headers=headers)
 
         # Raise an exception for bad status codes (4xx or 5xx)
@@ -49,8 +48,7 @@ def get_file(fastapi_url: str, bucket_name: str, object_name: str):
     print(f"Attempting to get file content from: {url}")
 
     try:
-        # 'stream=True' is still essential. It allows us to process the
-        # response as it arrives, chunk by chunk.
+        # 'stream=True' us to process the response as it arrives, chunk by chunk.
         with requests.get(url, stream=True) as r:
             # Raise an exception for bad status codes (4xx or 5xx)
             r.raise_for_status()
