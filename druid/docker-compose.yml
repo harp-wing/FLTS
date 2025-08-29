@@ -21,11 +21,12 @@ volumes:
   metadata_data: {}
   middle_var: {}
   historical_var: {}
-  historical_backup_var: {}
   broker_var: {}
   coordinator_var: {}
   router_var: {}
   druid_shared: {}
+  superset_postgres_data:
+  superset_home:
 
 
 services:
@@ -112,23 +113,6 @@ services:
       - common
       - druid-net
 
-  # historical_backup:
-  #   image: apache/druid:34.0.0
-  #   container_name: historical_backup
-  #   volumes:
-  #     - druid_shared:/opt/shared
-  #     - historical_backup_var:/opt/druid/var
-  #   depends_on: 
-  #     - zookeeper
-  #     - postgres
-  #     - coordinator
-  #   command:
-  #     - historical
-  #   env_file:
-  #     - environment
-  #   networks:
-  #     - druid-net
-
   middlemanager:
     image: apache/druid:34.0.0
     container_name: middlemanager
@@ -168,6 +152,44 @@ services:
     networks:
       - common
       - druid-net
+
+  # Superset
+  superset-db:
+      image: postgres:13
+      ports:
+        - "5434:5432"
+      environment:
+        POSTGRES_DB: superset
+        POSTGRES_USER: superset
+        POSTGRES_PASSWORD: superset
+      volumes:
+        - superset_postgres_data:/var/lib/postgresql/data
+      networks:
+        - druid-net
+
+  superset:
+    image: apache/superset:v5.0.0-dev
+    depends_on:
+      - superset-db
+    environment:
+      - SUPERSET_CONFIG_PATH=/app/superset_config.py
+      - SUPERSET_SECRET_KEY=superduperset
+    volumes:
+      - ./superset/superset_config.py:/app/superset_config.py
+      - superset_home:/app/superset_home
+    ports:
+      - "8088:8088"
+    networks:
+      - common
+      - druid-net
+    command: >
+      bash -c "
+        pip install psycopg2-binary &&
+        superset db upgrade &&
+        superset fab create-admin --username admin --firstname Superset --lastname Admin --email admin@superset.com --password admin &&
+        superset init &&
+        superset run -h 0.0.0.0 -p 8088 --with-threads --reload --debugger
+      "
 
 networks:
   common:
