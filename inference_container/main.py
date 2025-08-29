@@ -98,26 +98,9 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                         parquet_bytes = get_file(service.gateway_url, bucket, object_key)
                         table = pq.read_table(source=parquet_bytes)
                         service.df = table.to_pandas()
-                        if parquet_bytes:
-                            # Read the schema to access the file's metadata
-                            schema = pq.read_schema(parquet_bytes)
-                            custom_metadata = schema.metadata
 
-                            # 3. Retrieve and deserialize the scaler object
-                            serialized_scaler = custom_metadata.get(b'scaler_object')
-                            
-                            if serialized_scaler:
-                                inferencer.current_scaler = pickle.loads(serialized_scaler)
-                                scaler_type = custom_metadata.get(b'scaler_type', b'Unknown').decode('utf-8')
-
-                                print("Scaler object retrieved successfully.")
-                                print(f"Scaler Type: {scaler_type}")
-                                print("Scaler Object:", inferencer.current_scaler)
-                            else:
-                                print("'scaler_object' not found in the file's metadata.")
-                            
-                            if service.current_model is not None:
-                                service.perform_inference(service.df)
+                        if service.current_model is not None:
+                            service.perform_inference(service.df)
 
                     except Exception as e:
                         print(f"Inference worker error fetching, parsing, or during inference for {object_key}: {e}")

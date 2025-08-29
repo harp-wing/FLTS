@@ -1,14 +1,14 @@
 from client_utils import post_file
 from data_utils import window_data, check_uniform, time_to_feature, subset_scaler
 from kafka_utils import produce_message, publish_error
-import torch
+import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
-import pyarrow as pa
-import mlflow # type: ignore
-import io
+import mlflow
+from mlflow.artifacts import download_artifacts
 import os
-from typing import Tuple
+import pickle
+import tempfile
+from typing import Tuple, Optional
 from druid_utils import DruidIngester
 from typing import Union
 from sklearn.preprocessing import MinMaxScaler, StandardScaler # type: ignore
@@ -16,10 +16,8 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler # type: ignore
 # Constants - These should all be defined by the service later
 TIME_FEATURES = ["min_of_day", "day_of_week", "day_of_year"]
 TIME_FEATURES = [f"{feature}_sin" for feature in TIME_FEATURES] + [f"{feature}_cos" for feature in TIME_FEATURES]
-SAMPLE_IDX = 0
-INFERENCE_LENGTH = 720
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+SAMPLE_IDX = int(os.environ.get("SAMPLE_IDX", 0))
+INFERENCE_LENGTH = int(os.environ.get("INFERENCE_LENGTH", 1))
 
 class Inferencer:
     def __init__(self, gateway_url: str, producer, dlq_topic: str, output_topic: str):
@@ -34,7 +32,7 @@ class Inferencer:
         self.current_experiment_name = "Default"
         self.current_run_name = ""
         self.model_type = ""
-        self.model_class = "pytorch"  # "pytorch", "prophet", "statsforecast"
+        self.model_class = ""  # "pytorch", "prophet", "statsforecast"
 
     def load_model(self, experiment_name: str, run_name: str, sort: str="Recent"):
         print(f"Attempting to load model for experiment: {experiment_name}, run: {run_name}")
@@ -47,35 +45,64 @@ class Inferencer:
             else:
                 raise TypeError("Invalid sort argument")
             
-            runs_df = mlflow.search_runs(
+            runs_df: pd.DataFrame = mlflow.search_runs(
                 experiment_names=[experiment_name],
                 filter_string=f"tags.mlflow.runName = '{run_name}'", # Filter by run name
                 order_by=order,
                 max_results=1,
                 output_format="pandas"
-            )
+            ) # type: ignore (output_format="pandas" ensures we get a DataFrame)
 
             if runs_df.empty:
                 raise Exception(f"No runs found for experiment '{experiment_name}' with run name '{run_name}'.")
 
             run_id = runs_df.loc[0, "run_id"]
-            print(runs_df.columns)
-            self.output_seq_len = int(runs_df.loc[0, "params.output_sequence_length"])
+
+                    # Extract model parameters and store them in self.params
+            run_row = runs_df.iloc[0]
+            self.params = {}
+            for col in run_row.index:
+                if col.startswith("params."):
+                    param_name = col.replace("params.", "")
+                    self.params[param_name] = run_row[col]
+            
+            print(f"Extracted parameters: {self.params}")
             
             # Detect model type from experiment name or parameters
-            self.model_type, self.model_class = self._detect_model_type(runs_df.loc[0])
+            self.model_type, self.model_class = self._detect_model_type(runs_df.iloc[0])
             
             print(f"Found run with ID: {run_id}, Model type: {self.model_type}, Model class: {self.model_class}")
+
+            if self.model_class == "pytorch":
+                self.output_seq_len = int(runs_df.loc[0, "params.output_sequence_length"]) # type: ignore
 
             model_uri = f"runs:/{run_id}/{run_name}"
 
             print(f"Loading model from: {model_uri}")
-            mlflow.pyfunc.get_model_dependencies(model_uri)
+
+            reqs = mlflow.pyfunc.get_model_dependencies(model_uri)
+            print(f"Model dependencies: {reqs}")
+            # You could try to install these dependencies on the fly 
+            # but Pandas/Numpy might not be reloaded properly
+            # Also, not all dependencies may be necessary for inference (e.g. carbontracker)
+
             model = mlflow.pyfunc.load_model(model_uri)
             self.current_model = model
             self.current_experiment_name = experiment_name
             self.current_run_name = run_name
             print("✅ Model loaded successfully and updated service model.")
+
+            # Define the artifact path. This matches the key used during logging.
+            artifact_path = "scaler"
+            # Construct the full URI for the artifact.
+            scaler_artifact_uri = f"{model_uri}/artifacts/{artifact_path}"
+            scaler_path = os.path.join(tempfile.gettempdir(), "scaler.pkl")
+            local_scaler_path = download_artifacts(artifact_uri=scaler_artifact_uri, dst_path=scaler_path)
+            print(f"\nScaler path: {scaler_path}\nReturned: {local_scaler_path}\n")
+            # Load the scaler object from the downloaded file.
+            with open(scaler_path, "rb") as f:
+                self.current_scaler = pickle.load(f)
+            print(f"Scaler object successfully retrieved from {scaler_artifact_uri} and loaded from {local_scaler_path}")
 
         except Exception as e:
             print(f"Error loading model: {e}")
@@ -126,7 +153,16 @@ class Inferencer:
         # Default fallback
         return "", "pytorch"
 
-    def perform_inference(self, df_eval: pd.DataFrame):
+    def perform_inference(self, df_eval: Optional[pd.DataFrame] = None):
+        if df_eval is None:
+            if self.df is None:
+                print("No data provided for inference and service dataframe is empty.")
+                return
+            df_eval = self.df
+        else:
+            print(f"Raw data")
+            print(df_eval.head(3))
+            print(df_eval.tail(3))
         if self.current_model is None:
             print("Model not loaded yet. Skipping inference.")
             publish_error(
@@ -168,7 +204,11 @@ class Inferencer:
 
     def _perform_pytorch_inference(self, df_eval: pd.DataFrame, df_predictions: pd.DataFrame) -> pd.DataFrame:
         """PyTorch inference logic"""
+        import torch
+
         FEATURES = df_eval.columns.difference(TIME_FEATURES, sort=False).tolist()
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         X_eval, _ = window_data(df_eval, TIME_FEATURES)
         X_eval_tensor = torch.from_numpy(X_eval).float().to(device)
@@ -179,44 +219,47 @@ class Inferencer:
         current_sequence = X_eval_tensor[SAMPLE_IDX].unsqueeze(0).to(device)
 
         with torch.no_grad():
-            step = 0
-            while step < INFERENCE_LENGTH:
-                multi_step_pred = self.current_model.predict(current_sequence.cpu().numpy()) # type: ignore
-                remaining_steps = INFERENCE_LENGTH - step
-                steps_to_use = min(self.output_seq_len, remaining_steps)
+            current_sequence = X_eval_tensor[SAMPLE_IDX].unsqueeze(0).to(device)
+
+            for step in range(INFERENCE_LENGTH):
+                # Predict a full block of up to output_seq_len steps
+                multi_step_pred = self.current_model.predict(current_sequence.cpu().numpy())  # type: ignore
+                steps_to_use = min(self.output_seq_len, INFERENCE_LENGTH - step)
 
                 for i in range(steps_to_use):
                     absolute_step = step + i
-                    next_step = absolute_step + 1
                     if absolute_step >= INFERENCE_LENGTH:
                         break
 
                     current_pred = multi_step_pred[:, i, :].flatten()
                     df_predictions.loc[df_predictions.index[absolute_step], FEATURES] = current_pred
 
-                    if next_step <= available_future_steps:
-                        current_sequence = X_eval_tensor[SAMPLE_IDX + next_step].unsqueeze(0).to(device)
+                    next_step_idx = SAMPLE_IDX + absolute_step + 1
+                    if next_step_idx < X_eval_tensor.shape[0]:
+                        # Safe: use the next real row
+                        current_sequence = X_eval_tensor[next_step_idx].unsqueeze(0).to(device)
                     else:
-                        extension_idx = next_step - available_future_steps
-
+                        # Need to extend with predictions
+                        extension_idx = absolute_step + 1 - available_future_steps
                         if extension_idx < df_predictions.shape[0]:
                             extension_row = df_predictions.iloc[[extension_idx]][TIME_FEATURES]
                             numpy_extension, _ = window_data(
-                                extension_row,
-                                TIME_FEATURES,
-                                input_len=1, output_len=1
+                                extension_row, TIME_FEATURES, input_len=1, output_len=1
                             )
                             exog_tensor = torch.from_numpy(numpy_extension).float().to(device)
-                            
+
                             pred_tensor = torch.tensor(current_pred).float().view(1, 1, -1).to(device)
-                            
-                            current_pred_for_seq = torch.cat((pred_tensor, exog_tensor.unsqueeze(0)), dim=-1)
-                            current_sequence = torch.cat((current_sequence[:, 1:, :], current_pred_for_seq), dim=1)
+                            current_pred_for_seq = torch.cat((pred_tensor, exog_tensor), dim=-1)
+
+                            current_sequence = torch.cat(
+                                (current_sequence[:, 1:, :], current_pred_for_seq), dim=1
+                            )
                         else:
                             print(f"[Warning] df_predictions extension exhausted at index {extension_idx}. Stopping inference.")
                             break
 
-                step += steps_to_use
+                step += steps_to_use - 1  # outer loop also increments
+
 
         df_predictions = df_predictions.drop(columns=TIME_FEATURES)
 
@@ -242,30 +285,10 @@ class Inferencer:
     def _perform_prophet_inference(self, df_eval: pd.DataFrame, df_predictions: pd.DataFrame) -> pd.DataFrame:
         """Prophet inference logic"""
         # Prepare future dataframe for Prophet
-        timedelta = check_uniform(df_eval)
-        
-        future_df = pd.DataFrame(
-            index=pd.date_range(
-                start=df_eval.index[-1] + timedelta,  # Start from next time point
-                periods=INFERENCE_LENGTH,
-                freq=timedelta
-            )
-        )
-        future_df['ds'] = future_df.index
+        future_df = df_eval.reset_index().rename(columns={"index": "ds"})
         
         # Get predictions from Prophet model
-        predictions = self.current_model.predict(future_df) # type: ignore
-        
-        # Extract forecast columns (those ending with '_yhat')
-        forecast_columns = [col for col in predictions.columns if col.endswith('_yhat')]
-        
-        # Create output dataframe with original feature names
-        feature_names = [col.replace('_yhat', '') for col in forecast_columns]
-        df_predictions = pd.DataFrame(
-            predictions[forecast_columns].values,
-            index=future_df.index,
-            columns=feature_names
-        )
+        df_predictions = self.current_model.predict(future_df) # type: ignore
         
         # Apply inverse scaling if scaler is available
         if self.current_scaler is not None:
@@ -286,19 +309,43 @@ class Inferencer:
 
     def _perform_statsforecast_inference(self, df_eval: pd.DataFrame, df_predictions: pd.DataFrame) -> pd.DataFrame:
         """StatsForecast inference logic"""
-        # Get predictions from StatsForecast model
-        exog_df = df_predictions[TIME_FEATURES] if TIME_FEATURES else None
 
-        input_dict = {
-            "h": INFERENCE_LENGTH,
-            "X": exog_df,
-            "level": None
-        }
+        if self.params["downsampling"] == "0" or self.params["downsampling"] == self.params["frequency"]:
+            exog_df = df_predictions[TIME_FEATURES] if TIME_FEATURES else None
+
+            input_dict = {
+                "h": INFERENCE_LENGTH,
+                "X": exog_df,
+                "level": None
+            }
+        else:
+            downsampling = pd.Timedelta(self.params["downsampling"])
+            frequency = pd.Timedelta(self.params["frequency"])
+            inf_len: int = int(np.ceil(INFERENCE_LENGTH*frequency/downsampling))
+
+            if TIME_FEATURES:
+                df_predictions = pd.DataFrame(
+                    index=pd.date_range(
+                        start=df_eval.index[SAMPLE_IDX],
+                        periods=inf_len,
+                        freq=frequency
+                    ),
+                    columns=df_eval.columns
+                )
+
+                df_predictions = time_to_feature(df_predictions)
+                exog_df = df_predictions[TIME_FEATURES]
+            else:
+                exog_df = None
+
+            input_dict = {
+                "h": inf_len,
+                "X": exog_df,
+                "level": None
+            }
+
 
         df_predictions = self.current_model.predict(input_dict) # type: ignore
-        
-        # og_features = ["down", "up", "rnti_count", "mcs_down", "mcs_down_var", "mcs_up", "mcs_up_var", "rb_down", "rb_down_var", "rb_up", "rb_up_var"]
-        # self.current_scaler = subset_scaler(self.current_scaler, og_features, df_predictions.columns.to_list())
         
         # Apply inverse scaling if scaler is available
         if self.current_scaler is not None:
@@ -329,6 +376,10 @@ class Inferencer:
             print("Failed to ingest data")
 
         # Save to MinIO
+        # import pyarrow.parquet as pq
+        # import pyarrow as pa
+        # import io
+
         # output_table = pa.Table.from_pandas(df_transformed_predictions)
         # parquet_buffer = io.BytesIO()
         # pq.write_table(output_table, parquet_buffer)

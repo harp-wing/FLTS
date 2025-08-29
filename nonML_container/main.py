@@ -2,11 +2,13 @@
 import os
 import queue
 import threading
+import tempfile
+import pickle
 import mlflow # type: ignore
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
 import pyarrow.parquet as pq
-from typing import Any, List, Tuple, Optional
+from typing import Any, List
 from client_utils import get_file
 from data_utils import check_uniform, subset_scaler
 from kafka_utils import create_producer, create_consumer, produce_message, consume_messages, publish_error
@@ -57,6 +59,7 @@ def message_handler():
     """
     print("NonML worker thread started. Waiting for messages in queue...")
     GATEWAY_URL = env_var("GATEWAY_URL")
+
     while True:
         try:
             # Block until a message is available in the queue
@@ -72,18 +75,36 @@ def message_handler():
 
         if operation == "post: train data" and bucket and object_key:
             print(f"NonML worker fetching data from object store: s3://{bucket}/{object_key}")
+
             try:
                 parquet_bytes = get_file(GATEWAY_URL, bucket, object_key)
                 table = pq.read_table(source=parquet_bytes)
                 df = table.to_pandas()
+                if parquet_bytes:
+                    # Read the schema to access the file's metadata
+                    schema = pq.read_schema(parquet_bytes)
+                    custom_metadata = schema.metadata
+
+                    # Retrieve and deserialize the scaler object
+                    serialized_scaler = custom_metadata.get(b'scaler_object')
+                    
+                    if serialized_scaler:
+                        scaler = pickle.loads(serialized_scaler)
+                        print(f"Scaler object, {scaler}, retrieved successfully.")
+                    else:
+                        print("'scaler_object' not found in the file's metadata.")
+                if TRIMS:
+                    scaler = subset_scaler(scaler, df.columns.to_list(), TRIMS)
+                    df.drop(columns=df.columns.difference(TRIMS + TIME_FEATURES), inplace=True)
+                    print(f"df columns post-trim: {df.columns}")
+
             except Exception as e:
                 print(f"NonML worker error fetching or parsing data for {object_key}: {e}")
             
 
             print(f"NonML worker starting model training for data from {object_key}...")
             try:
-
-                main(df)
+                main(df, scaler)
 
                 print(f"NonML worker finished model training for data from {object_key}.")
 
@@ -97,12 +118,10 @@ def message_handler():
         # Mark the task as done after processing
         message_queue.task_done()
 
-def main(df: pd.DataFrame, experiment_name: str = "NonML"):
+def main(df: pd.DataFrame, scaler, experiment_name: str = "NonML"):
     OUTPUT_SEQ_LEN: int = int(os.environ.get("OUTPUT_SEQ_LEN", "1"))
     MODEL_TYPE: str = env_var("MODEL_TYPE")
-
-    TIME_FEATURES = ["min_of_day", "day_of_week", "day_of_year"]
-    TIME_FEATURES = [f"{feature}_sin" for feature in TIME_FEATURES] + [f"{feature}_cos" for feature in TIME_FEATURES]
+    SCALER_TYPE = scaler.__class__.__name__ # If negative values necessitate changes for certain models
     
     # === MLflow Logging ===
     mlflow.set_experiment(experiment_name)
@@ -110,21 +129,15 @@ def main(df: pd.DataFrame, experiment_name: str = "NonML"):
     run_name = MODEL_TYPE
 
     with mlflow.start_run(run_name=run_name, log_system_metrics=True):
-        # mlflow.autolog()
-        # scikit-learn==1.7.0
-        # statsmodels==0.14.4
+        # mlflow.autolog() will not work with current dependencies
 
-        # Prepare data
+        # Get data periodicity
         timedelta = check_uniform(df)
         offset = to_offset(timedelta).freqstr # type: ignore
 
-        df["unique_id"] = "1"
+        # Change datetime index to "ds" column for StatsForecast and Prophet
         df.index.rename("ds", inplace=True)
         df = df.reset_index()
-
-        # REDUCE FEATURES HERE
-        # ex:
-        # scaler = subset_scaler(scaler, df.columns.to_list(), trims)
 
         # Get feature columns (excluding ds and unique_id)
         feature_columns = [col for col in df.columns if col not in (["ds", "unique_id"]+TIME_FEATURES)]
@@ -132,8 +145,16 @@ def main(df: pd.DataFrame, experiment_name: str = "NonML"):
         print(f"Feature columns: {feature_columns}")
         print(f"Features: {df.columns.difference(feature_columns, sort=False).to_list()}")
 
+        # Save scaler to a temporary file because MLflow can only save artifacts from files
+        scaler_path = os.path.join(tempfile.gettempdir(), "scaler.pkl")
+        with open(scaler_path, "wb") as f:
+            pickle.dump(scaler, f)
+
         if MODEL_TYPE == "PROPHET":
-            # Collect Prophet parameters
+            # One could add a hyperparameter grid search here but it would be very slow
+            # and since Data Scientist input is needed to choose sensible ranges anyway,
+            # might as well just set them directly.
+
             prophet_params = {
                 "growth": os.environ.get("GROWTH", "linear"),
                 "n_changepoints": int(os.environ.get("N_CHANGEPOINTS", "25")),
@@ -145,7 +166,7 @@ def main(df: pd.DataFrame, experiment_name: str = "NonML"):
                 "seasonality_prior_scale": float(os.environ.get("SEASONALITY_PRIOR_SCALE", "10")),
                 "holidays_prior_scale": float(os.environ.get("HOLIDAYS_PRIOR_SCALE", "10")),
                 "changepoint_prior_scale": float(os.environ.get("CHANGEPOINT_PRIOR_SCALE", "0.05")),
-                "country": os.environ.get("COUNTRY", "US")
+                "country": os.environ.get("COUNTRY", "US") # for built-in holiday effects
             }
             
             # Log all Prophet parameters
@@ -159,18 +180,33 @@ def main(df: pd.DataFrame, experiment_name: str = "NonML"):
             mlflow.pyfunc.log_model(
                 name=MODEL_TYPE,
                 python_model=multi_prophet,
-                input_example=df[feature_columns].head(1), # check
-                code_paths=["models.py"]
+                code_paths=["models.py"],
+                artifacts={"scaler": scaler_path}
             )
             
-            # Perform cross-validation and log metrics
-            cv_metrics = multi_prophet.get_cross_validation_metrics(df, offset)
-            for metric_name, metric_value in cv_metrics.items():
-                if metric_value is not None:
-                    mlflow.log_metric(metric_name, metric_value)
+            # Log metrics
+            # for metric_name, metric_value in metrics.items():
+            #     if metric_value is not None:
+            #         mlflow.log_metric(metric_name, metric_value)
                 
         elif MODEL_TYPE in ["AUTOARIMA", "AUTOETS", "AUTOTHETA", "AUTOMFLES", "AUTOTBATS"]:
+
             DOWNSAMPLING = os.environ.get("DOWNSAMPLING", "0")
+            
+            if DOWNSAMPLING != "0":
+                try:
+                    downsampling = pd.Timedelta(DOWNSAMPLING)
+                    print(f"Before downsampling: {df.shape[0]} rows \n{df['ds'].head(3)}")
+                    df.set_index(["ds"], inplace=True)
+                    df = df.resample(downsampling).mean() # Could add other aggregation methods (e.g., sum, max)
+                    df.reset_index(inplace=True)
+                    print(f"After downsampling: {df.shape[0]} rows \n{df['ds'].head(3)}")
+                except ValueError:
+                    raise ValueError(f"Invalid DOWNSAMPLING value: {DOWNSAMPLING}. Must be a valid pandas Timedelta string.")
+
+            # Add dummy unique_id column because StatsForecast requires it
+            df["unique_id"] = "1"
+
             sl_env = os.environ.get("SEASON_LENGTH", "0")
             sl: List[int] = [int(x) for x in sl_env.strip("[]").split(",")]
 
@@ -185,7 +221,6 @@ def main(df: pd.DataFrame, experiment_name: str = "NonML"):
                 "output_sequence_length": OUTPUT_SEQ_LEN,
                 "season_length": SEASON_LENGTH,
                 "downsampling": DOWNSAMPLING,
-                "output_sequence_length": OUTPUT_SEQ_LEN,
                 "frequency": offset,
             }
             
@@ -193,6 +228,7 @@ def main(df: pd.DataFrame, experiment_name: str = "NonML"):
             mlflow.log_params({f"{k}": v for k, v in statsforecast_params.items()})
             
             # Create and fit multi-feature StatsForecast model
+            print(f"df shape: {df.shape}, df shape: {df.shape}")
             multi_statsforecast = StatsForecastMultiFeatureModel()
             multi_statsforecast.fit(df, feature_columns, statsforecast_params, TIME_FEATURES)
             
@@ -200,8 +236,9 @@ def main(df: pd.DataFrame, experiment_name: str = "NonML"):
             mlflow.pyfunc.log_model(
                 name=MODEL_TYPE,
                 python_model=multi_statsforecast,
-                # signature=multi_statsforecast.get_signature(),
-                code_paths=["models.py"]
+                # signature=multi_statsforecast.get_signature(), # Providing a signature or input example is bait, it's not suited for custom model wrappers
+                code_paths=["models.py"],
+                artifacts={"scaler": scaler_path}
             )
             
         else:
@@ -232,6 +269,14 @@ def main(df: pd.DataFrame, experiment_name: str = "NonML"):
             )
 
         print("✅ Model logged to MLflow")
+
+
+TIME_FEATURES = ["min_of_day", "day_of_week", "day_of_year"]
+TIME_FEATURES = [f"{feature}_sin" for feature in TIME_FEATURES] + [f"{feature}_cos" for feature in TIME_FEATURES]
+
+trims = os.environ.get("TRIMS", "[]").strip("[]").split(",")
+TRIMS = [item.strip().strip('"') for item in trims if item.strip().strip('"')]
+print(f"Trims: {TRIMS}")
 
 message_queue = queue.Queue()
 worker_thread = threading.Thread(target=message_handler, daemon=True)

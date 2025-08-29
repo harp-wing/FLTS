@@ -1,22 +1,24 @@
 import numpy as np
-import mlflow # type: ignore
-import mlflow.pytorch # type: ignore
-import datetime
+import pandas as pd
+import mlflow
+import mlflow.pytorch
+import pickle
+import tempfile
 import os
 import threading
 import queue
 import pyarrow.parquet as pq
 import torch
 from typing import List
-from models import LSTM, GRU, TETS, TCN
+from ml_models import LSTM, GRU, TETS, TCN
 from train import prepare_data_loaders, train
-from data_utils import window_data
+from data_utils import window_data, subset_scaler
 from client_utils import get_file
 from kafka_utils import create_consumer, consume_messages, create_producer, produce_message, publish_error
 
 def env_var(var: str) -> str:
     temp = os.environ.get(var)
-    if temp is None:
+    if not temp:
         raise TypeError(f"Environment variable, {var}, not defined")
     else:
         return temp
@@ -51,6 +53,27 @@ def message_handler():
                 parquet_bytes = get_file(GATEWAY_URL, bucket, object_key)
                 table = pq.read_table(source=parquet_bytes)
                 df = table.to_pandas()
+                if parquet_bytes:
+                    # Read the schema to access the file's metadata
+                    schema = pq.read_schema(parquet_bytes)
+                    custom_metadata = schema.metadata
+
+                    # Retrieve and deserialize the scaler object
+                    serialized_scaler = custom_metadata.get(b'scaler_object')
+                    
+                    if serialized_scaler:
+                        scaler = pickle.loads(serialized_scaler)
+                        print(f"Scaler object, {scaler}, retrieved successfully.")
+                    else:
+                        print("'scaler_object' not found in the file's metadata.")
+                if TRIMS:
+                    scaler = subset_scaler(scaler, df.columns.to_list(), TRIMS)
+                    df.drop(columns=df.columns.difference(TRIMS + TIME_FEATURES), inplace=True)
+
+                # Save scaler to a temporary file because MLflow can only save artifacts from files
+                scaler_path = os.path.join(tempfile.gettempdir(), "scaler.pkl")
+                with open(scaler_path, "wb") as f:
+                    pickle.dump(scaler, f)
             except Exception as e:
                 print(f"Train worker error fetching or parsing data for {object_key}: {e}")
             
@@ -58,7 +81,7 @@ def message_handler():
             print(f"Train worker starting model training for data from {object_key}...")
             try:
 
-                main(df) # TRAINING LOGIC CALL
+                main(df, scaler_path) # TRAINING LOGIC CALL
 
                 print(f"Train worker finished model training for data from {object_key}.")
 
@@ -70,7 +93,7 @@ def message_handler():
         # Mark the task as done after processing
         message_queue.task_done()
 
-def main(df, experiment_name: str="Default"):
+def main(df: pd.DataFrame, scaler_path, experiment_name: str="Default"):
     OUTPUT_SEQ_LEN: int = int(env_var("OUTPUT_SEQ_LEN"))
     INPUT_SEQ_LEN: int = int(env_var("INPUT_SEQ_LEN"))
     TRAIN_TEST_SPLIT: float = float(env_var("TRAIN_TEST_SPLIT"))
@@ -224,8 +247,8 @@ def main(df, experiment_name: str="Default"):
                 model,
                 name=MODEL_TYPE,
                 input_example=X_train[:1],
-                registered_model_name=None,
-                code_paths=["models.py"]
+                code_paths=["ml_models.py"],
+                artifacts={"scaler": scaler_path}
             )
             print("✅ Model logged to MLflow")
 
@@ -248,10 +271,22 @@ def main(df, experiment_name: str="Default"):
             )
 
 
+
+TIME_FEATURES = ["min_of_day", "day_of_week", "day_of_year"]
+TIME_FEATURES = [f"{feature}_sin" for feature in TIME_FEATURES] + [f"{feature}_cos" for feature in TIME_FEATURES]
+
+trims = os.environ.get("TRIMS", "[]").strip("[]").split(",")
+TRIMS = [item.strip() for item in trims if item.strip()]
+
 message_queue = queue.Queue()
 
 worker_thread = threading.Thread(target=message_handler, daemon=True)
 worker_thread.start()
 
-consumer = create_consumer(os.environ.get("CONSUMER_TOPIC"), os.environ.get("CONSUMER_GROUP_ID"))
+# debug
+from random import randint
+CONSUMER_GROUP_ID = f"CONSUMER_GROUP_ID{randint(0, 999)}"
+consumer = create_consumer(os.environ.get("CONSUMER_TOPIC"), CONSUMER_GROUP_ID)
+
+# consumer = create_consumer(os.environ.get("CONSUMER_TOPIC"), os.environ.get("CONSUMER_GROUP_ID"))
 consume_messages(consumer, callback)
