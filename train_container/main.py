@@ -86,6 +86,8 @@ def message_handler():
                 print(f"Train worker finished model training for data from {object_key}.")
 
             except Exception as e:
+                import traceback
+                traceback.print_exc()
                 print(f"Train worker error during model training for {object_key}: {e}")
         else:
             print(f"Train worker WARN: Message received without complete claim check details or unknown operation: {claim_check}")
@@ -229,6 +231,9 @@ def main(df: pd.DataFrame, scaler_path, experiment_name: str="Default"):
         print(f"[DEBUG] X shape: {X_train.shape}, y shape: {y_train.shape}")
         print(f"[DEBUG] NaNs — y: {np.isnan(y_train).any() | np.isinf(y_train).any()}, X: {np.isnan(X_train).any() | np.isinf(X_train).any()}")
 
+        # Log scaler as an artifact
+        mlflow.log_artifact(scaler_path, artifact_path="scaler")
+
         model = train(model, train_loader, test_loader,
                           epochs=EPOCHS,
                           optimizer_type="adam", # "adam" | "sgd"
@@ -248,7 +253,6 @@ def main(df: pd.DataFrame, scaler_path, experiment_name: str="Default"):
                 name=MODEL_TYPE,
                 input_example=X_train[:1],
                 code_paths=["ml_models.py"],
-                artifacts={"scaler": scaler_path}
             )
             print("✅ Model logged to MLflow")
 

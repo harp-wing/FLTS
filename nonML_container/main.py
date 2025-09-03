@@ -94,6 +94,7 @@ def message_handler():
                     else:
                         print("'scaler_object' not found in the file's metadata.")
                 if TRIMS:
+                    print(f"Trims: {TRIMS}")
                     scaler = subset_scaler(scaler, df.columns.to_list(), TRIMS)
                     df.drop(columns=df.columns.difference(TRIMS + TIME_FEATURES), inplace=True)
                     print(f"df columns post-trim: {df.columns}")
@@ -143,12 +144,14 @@ def main(df: pd.DataFrame, scaler, experiment_name: str = "NonML"):
         feature_columns = [col for col in df.columns if col not in (["ds", "unique_id"]+TIME_FEATURES)]
         
         print(f"Feature columns: {feature_columns}")
-        print(f"Features: {df.columns.difference(feature_columns, sort=False).to_list()}")
+        print(f"Non-Feature columns: {df.columns.difference(feature_columns, sort=False).to_list()}")
 
         # Save scaler to a temporary file because MLflow can only save artifacts from files
         scaler_path = os.path.join(tempfile.gettempdir(), "scaler.pkl")
         with open(scaler_path, "wb") as f:
             pickle.dump(scaler, f)
+        # Log scaler as an artifact
+        mlflow.log_artifact(scaler_path, artifact_path="scaler")
 
         if MODEL_TYPE == "PROPHET":
             # One could add a hyperparameter grid search here but it would be very slow
@@ -180,8 +183,7 @@ def main(df: pd.DataFrame, scaler, experiment_name: str = "NonML"):
             mlflow.pyfunc.log_model(
                 name=MODEL_TYPE,
                 python_model=multi_prophet,
-                code_paths=["models.py"],
-                artifacts={"scaler": scaler_path}
+                code_paths=["models.py"]
             )
             
             # Log metrics
@@ -226,9 +228,14 @@ def main(df: pd.DataFrame, scaler, experiment_name: str = "NonML"):
             
             # Log all StatsForecast parameters
             mlflow.log_params({f"{k}": v for k, v in statsforecast_params.items()})
-            
+
+            tf = df[df.columns.difference(["ds", "unique_id"] + TIME_FEATURES, sort=False)]
+            ds = df["ds"]
             # Create and fit multi-feature StatsForecast model
-            print(f"df shape: {df.shape}, df shape: {df.shape}")
+            print(f"\ndf shape: {df.shape}, df shape: {df.shape}")
+            print(f"Time range: {ds.iloc[0]} to {ds.iloc[-1]}")
+            print(f"Number of values less than or equal to zero in each column:\n{(tf <= 0).sum()}")
+            print(f"Maximum value:\n{tf.max()}\nMinimum value:\n{tf.min()}\n")
             multi_statsforecast = StatsForecastMultiFeatureModel()
             multi_statsforecast.fit(df, feature_columns, statsforecast_params, TIME_FEATURES)
             
@@ -237,8 +244,7 @@ def main(df: pd.DataFrame, scaler, experiment_name: str = "NonML"):
                 name=MODEL_TYPE,
                 python_model=multi_statsforecast,
                 # signature=multi_statsforecast.get_signature(), # Providing a signature or input example is bait, it's not suited for custom model wrappers
-                code_paths=["models.py"],
-                artifacts={"scaler": scaler_path}
+                code_paths=["models.py"]
             )
             
         else:
@@ -275,8 +281,7 @@ TIME_FEATURES = ["min_of_day", "day_of_week", "day_of_year"]
 TIME_FEATURES = [f"{feature}_sin" for feature in TIME_FEATURES] + [f"{feature}_cos" for feature in TIME_FEATURES]
 
 trims = os.environ.get("TRIMS", "[]").strip("[]").split(",")
-TRIMS = [item.strip().strip('"') for item in trims if item.strip().strip('"')]
-print(f"Trims: {TRIMS}")
+TRIMS: List = [item.strip().strip('"') for item in trims if item.strip().strip('"')]
 
 message_queue = queue.Queue()
 worker_thread = threading.Thread(target=message_handler, daemon=True)

@@ -11,7 +11,7 @@ import tempfile
 from typing import Tuple, Optional
 from druid_utils import DruidIngester
 from typing import Union
-from sklearn.preprocessing import MinMaxScaler, StandardScaler # type: ignore
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler
 
 # Constants - These should all be defined by the service later
 TIME_FEATURES = ["min_of_day", "day_of_week", "day_of_year"]
@@ -28,7 +28,7 @@ class Inferencer:
         self.df = None
         self.output_seq_len = 0
         self.current_model = None
-        self.current_scaler: Union[MinMaxScaler, StandardScaler, None] = None
+        self.current_scaler: Union[MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler, None] = None
         self.current_experiment_name = "Default"
         self.current_run_name = ""
         self.model_type = ""
@@ -76,7 +76,8 @@ class Inferencer:
             if self.model_class == "pytorch":
                 self.output_seq_len = int(runs_df.loc[0, "params.output_sequence_length"]) # type: ignore
 
-            model_uri = f"runs:/{run_id}/{run_name}"
+            base_uri = f"runs:/{run_id}"
+            model_uri = f"{base_uri}/{run_name}"
 
             print(f"Loading model from: {model_uri}")
 
@@ -93,16 +94,18 @@ class Inferencer:
             print("✅ Model loaded successfully and updated service model.")
 
             # Define the artifact path. This matches the key used during logging.
-            artifact_path = "scaler"
+            artifact_path = "scaler/scaler.pkl"
             # Construct the full URI for the artifact.
-            scaler_artifact_uri = f"{model_uri}/artifacts/{artifact_path}"
-            scaler_path = os.path.join(tempfile.gettempdir(), "scaler.pkl")
-            local_scaler_path = download_artifacts(artifact_uri=scaler_artifact_uri, dst_path=scaler_path)
-            print(f"\nScaler path: {scaler_path}\nReturned: {local_scaler_path}\n")
+            scaler_artifact_uri = f"{base_uri}/{artifact_path}"
+            print(scaler_artifact_uri)
+            scaler_path = download_artifacts(artifact_uri=scaler_artifact_uri, dst_path=tempfile.gettempdir())
+            print(scaler_path)
+
             # Load the scaler object from the downloaded file.
             with open(scaler_path, "rb") as f:
                 self.current_scaler = pickle.load(f)
-            print(f"Scaler object successfully retrieved from {scaler_artifact_uri} and loaded from {local_scaler_path}")
+            if self.current_scaler is not None:
+                print(f"Scaler object successfully retrieved from {scaler_artifact_uri} and loaded from {scaler_path}")
 
         except Exception as e:
             print(f"Error loading model: {e}")
@@ -180,7 +183,7 @@ class Inferencer:
 
         df_predictions = pd.DataFrame(
             index=pd.date_range(
-                start=df_eval.index[SAMPLE_IDX],
+                start=df_eval.index[SAMPLE_IDX] + timedelta,
                 periods=INFERENCE_LENGTH,
                 freq=timedelta
             ),
@@ -284,11 +287,9 @@ class Inferencer:
 
     def _perform_prophet_inference(self, df_eval: pd.DataFrame, df_predictions: pd.DataFrame) -> pd.DataFrame:
         """Prophet inference logic"""
-        # Prepare future dataframe for Prophet
-        future_df = df_eval.reset_index().rename(columns={"index": "ds"})
         
         # Get predictions from Prophet model
-        df_predictions = self.current_model.predict(future_df) # type: ignore
+        df_predictions = self.current_model.predict(df_predictions) # type: ignore
         
         # Apply inverse scaling if scaler is available
         if self.current_scaler is not None:
@@ -360,7 +361,7 @@ class Inferencer:
 
         print(f"StatsForecast Inference completed:")
         print(f"- Total predictions generated: {df_transformed_predictions.shape[0]}")
-        print(f"- Features forecasted: {list(df_transformed_predictions.columns)}")
+        print(f"- Features forecasted: {df_transformed_predictions.columns.to_list()}")
 
         return df_transformed_predictions
 
@@ -369,7 +370,7 @@ class Inferencer:
         # Ingest to Druid
         druid = DruidIngester()
         druid_df = df_transformed_predictions.reset_index(names="time")
-        task_id = druid.ingest_dataframe(druid_df, f"{self.current_run_name}", "time")
+        task_id = druid.ingest_dataframe(druid_df, f"{self.current_run_name}_5", "time")
         if task_id:
             print(f"Data ingested successfully. Task ID: {task_id}")
         else:

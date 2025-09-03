@@ -25,7 +25,7 @@ class DruidIngester:
             df_copy = df.copy()
             
             print(df.columns)
-            print(df.head(5))
+            print(df.head(4))
 
             # Handle timestamp column
             if not (timestamp_column and timestamp_column in df.columns):

@@ -115,6 +115,8 @@ class ProphetMultiFeatureModel(PythonModel):
             future_df: pd.DataFrame = pd.DataFrame(model_input)
 
         predictions: List[pd.DataFrame] = []
+
+        future_df.reset_index(names="ds", inplace=True)
         
         tasks = [
             (col, self.models[col], future_df)
@@ -329,8 +331,7 @@ class StatsForecastMultiFeatureModel(PythonModel):
 
         if X is not None:    
             X.loc[:, "unique_id"] = "1"
-            X.index.rename("ds", inplace=True)
-            X = X.reset_index()
+            X.reset_index(names="ds", inplace=True)
 
         all_predictions = []
 
@@ -340,16 +341,12 @@ class StatsForecastMultiFeatureModel(PythonModel):
 
             forecast: pd.DataFrame = self.models[column].predict(h=h, X_df=X, level=level)  # type: ignore
 
-            print(f"Raw {column}: {forecast.head(3)}") 
-
         # Extract the forecast series and align on time index
             match = next((c for c in forecast.columns if c.lower() == self.model_type.lower()), None)
             if match:
                 forecast = forecast.rename(columns={match: column})
 
             series = forecast[forecast.columns.difference(["unique_id"], sort=False)]
-
-            print(f"Raw series: {series.head(3)}") 
 
             series = series.set_index("ds")
             all_predictions.append(series)

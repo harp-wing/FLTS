@@ -59,6 +59,11 @@ def accumulate_metric(y_true: Union[np.ndarray, torch.Tensor],
     if not isinstance(y_pred, np.ndarray):
         y_pred = y_pred.cpu().numpy()
 
+    # Flatten if >2D (e.g., batch × seq × features)
+    if y_true.ndim > 2:
+        y_true = y_true.reshape(-1, y_true.shape[-1])
+        y_pred = y_pred.reshape(-1, y_pred.shape[-1])
+
     mse = mean_squared_error(y_true, y_pred)
     rmse = math.sqrt(mse)
     mae = mean_absolute_error(y_true, y_pred)

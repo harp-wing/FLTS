@@ -28,14 +28,21 @@ test_file_content = get_file(FASTAPI_URL, INPUT_BUCKET, TEST_OBJECT_NAME)
 # ------- Preprocess Data --------
 #----------------------------------
 
-SCALER = os.environ.get("SCALER", "StandardScaler")
+SCALER = os.environ.get("SCALER", None)
+ADD_VAL = os.environ.get("ADD_VAL", None)
 
 druid = DruidIngester()
 
 df = read_data(file_content, IDENTIFIER)
 df = handle_nans(df)
-df, scaler = scale_data(df, SCALER)
-# bin_outliers(df)
+# df = clip_outliers(df, method="percentile", factor=0.25) # or bin_outliers(df) <-- potential method to train different models for spikes vs baseline
+
+if SCALER is None:
+    scaler = None
+else:
+    df, scaler = scale_data(df, SCALER)
+if ADD_VAL is not None:
+    df.add(float(ADD_VAL))
 df = time_to_feature(df)
 
 test_df = read_data(test_file_content)
@@ -48,7 +55,10 @@ if task_id:
 else:
     print("Failed to ingest data")
 
+# test_df = clip_outliers(test_df, method="percentile", factor=0.1)
 test_df, _ = scale_data(test_df, scale=scaler)
+if ADD_VAL is not None:
+    test_df.add(float(ADD_VAL))
 test_df = time_to_feature(test_df)
 
 print(f"df: {df.head(3)}, test_df: {test_df.head(3)}")
