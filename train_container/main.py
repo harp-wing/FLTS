@@ -140,6 +140,9 @@ def main(df: pd.DataFrame, scaler_path, experiment_name: str="Default"):
         config.update({"patience": PATIENCE})
 
     config.update({"model_type": MODEL_TYPE})
+
+    optimizer = "adam"
+    schedule = False
     
     if MODEL_TYPE == "LSTM":
         HIDDEN_SIZE: int = int(env_var("HIDDEN_SIZE"))
@@ -179,6 +182,9 @@ def main(df: pd.DataFrame, scaler_path, experiment_name: str="Default"):
         NUM_LAYERS: int = int(env_var("NUM_LAYERS"))
         FEEDFORWARD_DIM: int = int(env_var("FEEDFORWARD_DIM"))
         DROPOUT: float = float(env_var("DROPOUT"))
+
+        optimizer = "adamw"
+        schedule = True
 
         config.update({
             "model_dim": MODEL_DIM,
@@ -236,7 +242,8 @@ def main(df: pd.DataFrame, scaler_path, experiment_name: str="Default"):
 
         model = train(model, train_loader, test_loader,
                           epochs=EPOCHS,
-                          optimizer_type="adam", # "adam" | "sgd"
+                          optimizer_type=optimizer, # "adam" | "adamw" | "sgd"
+                          schedule=schedule,
                           lr=LEARNING_RATE,
                           criterion="mse", # "mse" | "l1"
                           device=device,

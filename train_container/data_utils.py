@@ -280,7 +280,7 @@ def window_data(df: pd.DataFrame, exo_features: Optional[List[str]] = None, inpu
 
     for row in range(n_rows - input_len - output_len + 1):
         x[row, :input_len, :] = x_df.iloc[row:row+input_len, :].values
-        y[row, :output_len, :] = y_df.iloc[row:row+output_len, :].values
+        y[row, :output_len, :] = y_df.iloc[row+input_len:row+input_len+output_len, :].values
     
     return x, y
 

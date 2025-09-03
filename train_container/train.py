@@ -29,11 +29,13 @@ def prepare_data_loaders(X_train, y_train, X_test, y_test, batch_size=32, shuffl
     return train_loader, test_loader
 
 
-# Code Below Borrowed from University of Thessalonika Federated Learning Paper
+# Code Below Borrowed (but modified) from University of Thessalonika Federated Learning Paper
 def get_optim(model, optim_name: str = "adam", lr: float = 1e-3):
     """Returns the specified optimizer for the model defined as a torch module."""
     if optim_name == "adam":
         return torch.optim.Adam(model.parameters(), lr=lr)
+    elif optim_name == "adamw":
+        return torch.optim.AdamW(model.parameters(), lr=lr)
     elif optim_name == "sgd":
         return torch.optim.SGD(model.parameters(), lr=lr)
     else:
@@ -153,6 +155,7 @@ def train(model: torch.nn.Module,
           epochs: int = 10,
           optimizer_type: str = "adam",
           lr: float = 1e-3,
+          schedule: bool = True,
           reg1: float = 0.,
           reg2: float = 0.,
           max_grad_norm: float = 0.,
@@ -166,6 +169,18 @@ def train(model: torch.nn.Module,
     
     optimizer = get_optim(model, optimizer_type, lr)
     loss_fn = get_criterion(criterion)
+
+    if schedule:
+        from transformers import get_linear_schedule_with_warmup
+
+        num_training_steps = epochs * len(train_loader)
+        warmup_steps = int(0.1 * num_training_steps)  # e.g., 10% warmup
+
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=num_training_steps
+        )
     
     monitor = EarlyStopping(patience, trace=log_per == 1) if early_stopping else None
     
@@ -204,6 +219,8 @@ def train(model: torch.nn.Module,
             if max_grad_norm > 0.:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             optimizer.step()
+            if schedule:
+                scheduler.step()
             total_train_loss += loss.item() * x.size(0)
             
         train_loss = total_train_loss / len(train_loader.dataset)

@@ -26,6 +26,7 @@ class Inferencer:
         self.dlq_topic = dlq_topic
         self.output_topic = output_topic
         self.df = None
+        self.input_seq_len = 0
         self.output_seq_len = 0
         self.current_model = None
         self.current_scaler: Union[MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler, None] = None
@@ -74,7 +75,8 @@ class Inferencer:
             print(f"Found run with ID: {run_id}, Model type: {self.model_type}, Model class: {self.model_class}")
 
             if self.model_class == "pytorch":
-                self.output_seq_len = int(runs_df.loc[0, "params.output_sequence_length"]) # type: ignore
+                self.input_seq_len = int(runs_df["params.input_sequence_length"][0])
+                self.output_seq_len = int(runs_df["params.output_sequence_length"][0])
 
             base_uri = f"runs:/{run_id}"
             model_uri = f"{base_uri}/{run_name}"
@@ -213,7 +215,7 @@ class Inferencer:
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        X_eval, _ = window_data(df_eval, TIME_FEATURES)
+        X_eval, _ = window_data(df_eval, TIME_FEATURES, self.input_seq_len, self.output_seq_len)
         X_eval_tensor = torch.from_numpy(X_eval).float().to(device)
 
         remaining_real_data = X_eval.shape[0] - SAMPLE_IDX

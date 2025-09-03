@@ -128,6 +128,7 @@ services:
       - PRODUCER_TOPIC_1=inference-data
 
       - SCALER=StandardScaler
+      # - ADD_VAL=1e-9
     depends_on:
       fastapi-app:
         condition: service_started
@@ -138,75 +139,75 @@ services:
       - app-network
     
   # Training Container (consumer/producer)
-  # train:
-  #   build: ./train_container
-  #   ports:
-  #     - "8021:8021"
-  #   depends_on:
-  #     mlflow:
-  #       condition: service_started
-  #     kafka:
-  #       condition: service_healthy
-  #   environment:
-  #     - GATEWAY_URL=http://fastapi-app:8000
-  #     - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-  #     - CONSUMER_TOPIC=training-data
-  #     - CONSUMER_GROUP_ID=train
-  #     - PRODUCER_TOPIC=model-training
-  #     - MLFLOW_TRACKING_URI=http://mlflow:5000
-  #     - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
-  #     - AWS_ACCESS_KEY_ID=minioadmin
-  #     - AWS_SECRET_ACCESS_KEY=minioadmin
-
-  #     - MODEL_TYPE=TCN
-  #     - TRAIN_TEST_SPLIT=0.8
-  #     - INPUT_SEQ_LEN=10
-  #     - OUTPUT_SEQ_LEN=1
-      
-  #     - HIDDEN_SIZE=128
-  #     - NUM_LAYERS=4
-  #     - MODEL_DIM=128
-  #     - NUM_HEADS=8
-  #     - FEEDFORWARD_DIM=512
-  #     - DROPOUT=0.1
-  #     - LAYER_ARCHITECTURE=[32, 64, 128, 256]
-  #     - KERNEL_SIZE=2
-
-  #     - BATCH_SIZE=32
-  #     - EPOCHS=50
-  #     - EARLY_STOPPING=True
-  #     - PATIENCE=30
-  #     - LEARNING_RATE=0.001
-
-  #   networks:
-  #     - app-network
-
-  nonml:
-    build: ./nonML_container
+  train:
+    build: ./train_container
     ports:
-      - "8022:8022"
+      - "8021:8021"
     depends_on:
+      mlflow:
+        condition: service_started
       kafka:
         condition: service_healthy
     environment:
       - GATEWAY_URL=http://fastapi-app:8000
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CONSUMER_TOPIC=training-data
+      - CONSUMER_GROUP_ID=train
+      - PRODUCER_TOPIC=model-training
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
-      - CONSUMER_TOPIC=training-data
-      - CONSUMER_GROUP_ID=nonml
-      - PRODUCER_TOPIC=model-training
 
-      - MODEL_TYPE=AUTOARIMA # (str) Options: PROPHET, AUTOARIMA, AUTOETS, AUTOTHETA, AUTOMFLES, AUTOTBATS
-      - DOWNSAMPLING=0 # (str) 0 for original periodicity
-      - SEASON_LENGTH=30 # (int) Recommend smallest relevant seasonality
+      - MODEL_TYPE=TETS
+      - TRAIN_TEST_SPLIT=0.8
+      - INPUT_SEQ_LEN=10
+      - OUTPUT_SEQ_LEN=1
+      
+      - HIDDEN_SIZE=128
+      - NUM_LAYERS=4
+      - MODEL_DIM=128
+      - NUM_HEADS=8
+      - FEEDFORWARD_DIM=512
+      - DROPOUT=0.1
+      - LAYER_ARCHITECTURE=[32, 64, 128, 256]
+      - KERNEL_SIZE=2
 
-      # - TRIMS=["down"]
+      - BATCH_SIZE=32
+      - EPOCHS=50
+      - EARLY_STOPPING=True
+      - PATIENCE=30
+      - LEARNING_RATE=0.001
 
     networks:
       - app-network
+
+  # nonml:
+  #   build: ./nonML_container
+  #   ports:
+  #     - "8022:8022"
+  #   depends_on:
+  #     kafka:
+  #       condition: service_healthy
+  #   environment:
+  #     - GATEWAY_URL=http://fastapi-app:8000
+  #     - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+  #     - MLFLOW_TRACKING_URI=http://mlflow:5000
+  #     - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+  #     - AWS_ACCESS_KEY_ID=minioadmin
+  #     - AWS_SECRET_ACCESS_KEY=minioadmin
+  #     - CONSUMER_TOPIC=training-data
+  #     - CONSUMER_GROUP_ID=nonml
+  #     - PRODUCER_TOPIC=model-training
+
+  #     - MODEL_TYPE=AUTOARIMA # (str) Options: PROPHET, AUTOARIMA, AUTOETS, AUTOTHETA, AUTOMFLES, AUTOTBATS
+  #     - DOWNSAMPLING=0 # (str) 0 for original periodicity
+  #     - SEASON_LENGTH=30 # (int) Recommend smallest relevant seasonality
+
+  #     # - TRIMS=["down"]
+
+  #   networks:
+  #     - app-network
 
   # Inference Container (consumer/producer)
   inference:

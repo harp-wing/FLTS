@@ -302,6 +302,7 @@ preprocess:
   job:
     parallelism: 1
     restartPolicy: OnFailure
+  scaler: MinMaxScaler
   kafka:
     topics:
       training: "training-data"

@@ -120,6 +120,8 @@ spec:
               value: "{{ .Values.preprocess.kafka.topics.training }}"
             - name: PRODUCER_TOPIC_1
               value: "{{ .Values.preprocess.kafka.topics.inference }}"
+            - name: SCALER
+              value: "{{ .Values.preprocess.scaler }}"
       restartPolicy: Never
   backoffLimit: 3
 
