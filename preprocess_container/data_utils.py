@@ -108,7 +108,9 @@ def handle_nans(df: pd.DataFrame, threshold: float = 0.33, window: int = 2, no_d
 
 def scale_data(df: pd.DataFrame, scale: Any="StandardScaler") -> tuple[pd.DataFrame, Any]:
     df_return = select_numeric(df)
-
+    
+    if scale is None:
+        return df_return, None
 
     if isinstance(scale, str):
         match scale:
@@ -130,6 +132,47 @@ def scale_data(df: pd.DataFrame, scale: Any="StandardScaler") -> tuple[pd.DataFr
     df_return = pd.DataFrame(scaler.fit_transform(df_return), index=df.index, columns=df.columns)
 
     return df_return, scaler
+
+def clip_outliers(df: pd.DataFrame, cols: Optional[List] = None, method: str = "iqr", factor: float = 1.5) -> pd.DataFrame:
+    """
+    Clip outliers in specified columns of a dataframe.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe.
+    cols : list, optional
+        List of columns to clip. If None, all numeric columns are clipped.
+    method : str, default "iqr"
+        Method to detect outliers: "iqr" or "percentile".
+    factor : float, default 1.5
+        Factor for IQR method, or percentile range (e.g., 0.01 → clip 1st/99th percentile).
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with clipped values.
+    """
+    df_clipped = select_numeric(df)
+    if cols is None:
+        cols = df_clipped.columns.tolist()
+    
+    for col in cols:
+        if method == "iqr":
+            Q1 = df_clipped[col].quantile(0.25)
+            Q3 = df_clipped[col].quantile(0.75)
+            IQR = Q3 - Q1
+            lower = Q1 - factor * IQR
+            upper = Q3 + factor * IQR
+        elif method == "percentile":
+            lower = df_clipped[col].quantile(factor)
+            upper = df_clipped[col].quantile(1 - factor)
+        else:
+            raise ValueError("method must be 'iqr' or 'percentile'")
+        
+        df_clipped[col] = df_clipped[col].clip(lower=lower, upper=upper)
+    
+    return df_clipped
 
 def generate_lags(df: pd.DataFrame, n_lags: int, step: int=1) -> pd.DataFrame:
     '''
@@ -244,10 +287,10 @@ def window_data(df: pd.DataFrame, exo_features: Optional[List[str]] = None, inpu
 def subset_scaler(original_scaler, original_columns, subset_columns):
     """
     Creates a new scaler for a subset of features from an existing fitted scaler.
-    This version works for both StandardScaler and MinMaxScaler.
+    Supports StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler, and LogScaler.
 
     Args:
-        original_scaler: The scaler object (StandardScaler or MinMaxScaler).
+        original_scaler: The fitted scaler object.
         original_columns (list): The column names from the original DataFrame.
         subset_columns (list): A list of column names for the new scaler.
 
@@ -260,26 +303,41 @@ def subset_scaler(original_scaler, original_columns, subset_columns):
     # Find the integer indices of the subset columns
     subset_indices = [original_columns.index(col) for col in subset_columns]
 
-    # Check scaler type and assign the correct attributes
     if isinstance(original_scaler, StandardScaler):
-        subset_scaler = StandardScaler()
-        # StandardScaler uses 'mean_' and 'scale_' (std dev)
-        if original_scaler.mean_ is None or original_scaler.scale_ is None:
-            raise ValueError("The original StandardScaler is not fitted or missing required attributes.")
-        subset_scaler.mean_ = original_scaler.mean_[subset_indices]
-        subset_scaler.scale_ = original_scaler.scale_[subset_indices]
+        subset = StandardScaler()
+        if original_scaler.mean_ is not None:
+            subset.mean_ = original_scaler.mean_[subset_indices]
+        else:
+            subset.mean_ = None
+        if original_scaler.scale_ is not None:
+            subset.scale_ = original_scaler.scale_[subset_indices]
+        else:
+            subset.scale_ = None
+
     elif isinstance(original_scaler, MinMaxScaler):
-        subset_scaler = MinMaxScaler()
-        # MinMaxScaler uses 'min_' and 'scale_' (feature range)
-        if original_scaler.min_ is None or original_scaler.scale_ is None:
-            raise ValueError("The original MinMaxScaler is not fitted or missing required attributes.")
-        subset_scaler.min_ = original_scaler.min_[subset_indices]
-        subset_scaler.scale_ = original_scaler.scale_[subset_indices]
+        subset = MinMaxScaler()
+        subset.min_ = original_scaler.min_[subset_indices]
+        subset.scale_ = original_scaler.scale_[subset_indices]
+        subset.data_min_ = original_scaler.data_min_[subset_indices]
+        subset.data_max_ = original_scaler.data_max_[subset_indices]
+        subset.data_range_ = original_scaler.data_range_[subset_indices]
+
+    elif isinstance(original_scaler, RobustScaler):
+        subset = RobustScaler()
+        subset.center_ = original_scaler.center_[subset_indices]
+        subset.scale_ = original_scaler.scale_[subset_indices]
+
+    elif isinstance(original_scaler, MaxAbsScaler):
+        subset = MaxAbsScaler()
+        subset.max_abs_ = original_scaler.max_abs_[subset_indices]
+        subset.scale_ = original_scaler.scale_[subset_indices]
+
     else:
-        raise TypeError("Unsupported scaler type. This function only supports StandardScaler and MinMaxScaler.")
+        raise TypeError("Unsupported scaler type. This function only supports "
+                        "StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler, and LogScaler.")
 
     # Set feature info for scikit-learn validation
-    subset_scaler.n_features_in_ = len(subset_columns)
-    subset_scaler.feature_names_in_ = np.array(subset_columns, dtype=object)
+    subset.n_features_in_ = len(subset_columns)
+    subset.feature_names_in_ = np.array(subset_columns, dtype=object)
 
-    return subset_scaler
+    return subset
