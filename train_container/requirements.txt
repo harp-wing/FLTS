@@ -15,3 +15,4 @@ mlflow[extras]==3.3.1
 kafka-python[crc32c]==2.2.15
 carbontracker==2.3.1
 transformers==4.56.0
+captum

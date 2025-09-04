@@ -35,7 +35,7 @@ def get_optim(model, optim_name: str = "adam", lr: float = 1e-3):
     if optim_name == "adam":
         return torch.optim.Adam(model.parameters(), lr=lr)
     elif optim_name == "adamw":
-        return torch.optim.AdamW(model.parameters(), lr=lr)
+        return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     elif optim_name == "sgd":
         return torch.optim.SGD(model.parameters(), lr=lr)
     else:
@@ -122,7 +122,7 @@ class EarlyStopping:
         self.best_model = copy.deepcopy(model)
 
 
-def test(model, data, criterion, device="cuda") -> Tuple[float, float, float, float, float, float]:
+def test(model, data, criterion, device="cuda", ss: bool = False) -> Tuple[float, float, float, float, float, float]:
     """Tests a trained model and returns metrics."""
     model.to(device)
     model.eval()
@@ -133,10 +133,22 @@ def test(model, data, criterion, device="cuda") -> Tuple[float, float, float, fl
     with torch.no_grad():
         for x, y in data:
             x, y = x.to(device), y.to(device)
-            out = model(x)
-            total_loss += criterion(out, y).item() * x.size(0)
+
+            if ss:
+                # For testing, always use the model's own predictions (teacher_forcing_ratio = 0.0)
+                y_pred = model(x, y, teacher_forcing_ratio=0.0)
+                # Calculate loss against the endogenous part of the target tensor
+                loss = criterion(y_pred, y[:, :, :model.n_endo_features])
+                # trim exo features for comparison
+                y = y[:, :, :model.n_endo_features]
+            else:
+                # Original logic for non-seq2seq models
+                y_pred = model(x)
+                loss = criterion(y_pred, y)
+
+            total_loss += loss.item() * x.size(0)
             y_true_list.append(y.cpu())
-            y_pred_list.append(out.cpu())
+            y_pred_list.append(y_pred.cpu())
             
     loss = total_loss / len(data.dataset)
     
@@ -155,7 +167,9 @@ def train(model: torch.nn.Module,
           epochs: int = 10,
           optimizer_type: str = "adam",
           lr: float = 1e-3,
-          schedule: bool = True,
+          scheduled_learning: bool = False,
+          scheduled_sampling: bool = False,
+          ss_decay: float = 0.33,
           reg1: float = 0.,
           reg2: float = 0.,
           max_grad_norm: float = 0.,
@@ -165,12 +179,15 @@ def train(model: torch.nn.Module,
           log_per: int = 1,
           use_carbontracker: bool = False):
     """Trains a neural network defined as a torch module."""
+
     best_model, best_loss, best_epoch = None, float('inf'), -1
     
     optimizer = get_optim(model, optimizer_type, lr)
     loss_fn = get_criterion(criterion)
 
-    if schedule:
+
+    # For Transformers
+    if scheduled_learning:
         from transformers import get_linear_schedule_with_warmup
 
         num_training_steps = epochs * len(train_loader)
@@ -181,6 +198,7 @@ def train(model: torch.nn.Module,
             num_warmup_steps=warmup_steps,
             num_training_steps=num_training_steps
         )
+    
     
     monitor = EarlyStopping(patience, trace=log_per == 1) if early_stopping else None
     
@@ -195,6 +213,12 @@ def train(model: torch.nn.Module,
     for epoch in range(epochs):
         if cb_tracker:
             cb_tracker.epoch_start()
+        
+        if scheduled_sampling:
+            # Linearly decay the teacher forcing ratio from 1.0 to 0.0 over ss_decay_epochs
+            teacher_forcing_ratio = max(0.0, 1.0 - (epoch / (epochs*ss_decay)))
+            if (epoch + 1) % log_per == 0:
+                log(INFO, f"Epoch {epoch + 1}: Using teacher_forcing_ratio: {teacher_forcing_ratio:.4f}")
 
         # Training Phase
         model.train().to(device)
@@ -202,8 +226,14 @@ def train(model: torch.nn.Module,
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
-            y_pred = model(x)
-            loss = loss_fn(y_pred, y)
+            
+            if scheduled_sampling:
+                y_pred = model(x, y, teacher_forcing_ratio)
+                # Ensure the model has 'n_endo_features' attribute
+                loss = loss_fn(y_pred, y[:, :, :model.n_endo_features])
+            else:
+                y_pred = model(x)
+                loss = loss_fn(y_pred, y)
 
             # L1/L2 Regularization
             if reg1 > 0. or reg2 > 0.:
@@ -219,15 +249,15 @@ def train(model: torch.nn.Module,
             if max_grad_norm > 0.:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             optimizer.step()
-            if schedule:
+            if scheduled_learning:
                 scheduler.step()
             total_train_loss += loss.item() * x.size(0)
             
         train_loss = total_train_loss / len(train_loader.dataset)
 
         # Evaluation Phase
-        test_loss, test_mse, test_rmse, _, _, _ = test(model, test_loader, loss_fn, device)
-        train_loss_eval, train_mse, train_rmse, train_mae, train_r2, train_nrmse = test(model, train_loader, loss_fn, device)
+        test_loss, test_mse, test_rmse, _, _, _ = test(model, test_loader, loss_fn, device, ss=scheduled_sampling)
+        train_loss_eval, train_mse, train_rmse, train_mae, train_r2, train_nrmse = test(model, train_loader, loss_fn, device, ss=scheduled_sampling)
 
         # Logging
         if (epoch + 1) % log_per == 0:

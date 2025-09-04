@@ -127,7 +127,7 @@ services:
       - PRODUCER_TOPIC_0=training-data
       - PRODUCER_TOPIC_1=inference-data
 
-      - SCALER=StandardScaler
+      - SCALER=MinMaxScaler
       # - ADD_VAL=1e-9
     depends_on:
       fastapi-app:
@@ -159,17 +159,17 @@ services:
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
 
-      - MODEL_TYPE=TETS
+      - MODEL_TYPE=GRU
       - TRAIN_TEST_SPLIT=0.8
       - INPUT_SEQ_LEN=10
       - OUTPUT_SEQ_LEN=1
       
       - HIDDEN_SIZE=128
-      - NUM_LAYERS=4
+      - NUM_LAYERS=3
       - MODEL_DIM=128
       - NUM_HEADS=8
       - FEEDFORWARD_DIM=512
-      - DROPOUT=0.1
+      - DROPOUT=0.2
       - LAYER_ARCHITECTURE=[32, 64, 128, 256]
       - KERNEL_SIZE=2
 
@@ -177,7 +177,7 @@ services:
       - EPOCHS=50
       - EARLY_STOPPING=True
       - PATIENCE=30
-      - LEARNING_RATE=0.001
+      - LEARNING_RATE=1e-4
 
     networks:
       - app-network

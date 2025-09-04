@@ -185,7 +185,7 @@ class Inferencer:
 
         df_predictions = pd.DataFrame(
             index=pd.date_range(
-                start=df_eval.index[SAMPLE_IDX] + timedelta,
+                start=df_eval.index[SAMPLE_IDX + self.input_seq_len],
                 periods=INFERENCE_LENGTH,
                 freq=timedelta
             ),
@@ -220,8 +220,6 @@ class Inferencer:
 
         remaining_real_data = X_eval.shape[0] - SAMPLE_IDX
         available_future_steps = min(remaining_real_data, INFERENCE_LENGTH)
-
-        current_sequence = X_eval_tensor[SAMPLE_IDX].unsqueeze(0).to(device)
 
         with torch.no_grad():
             current_sequence = X_eval_tensor[SAMPLE_IDX].unsqueeze(0).to(device)
@@ -372,7 +370,7 @@ class Inferencer:
         # Ingest to Druid
         druid = DruidIngester()
         druid_df = df_transformed_predictions.reset_index(names="time")
-        task_id = druid.ingest_dataframe(druid_df, f"{self.current_run_name}_5", "time")
+        task_id = druid.ingest_dataframe(druid_df, f"{self.current_run_name}_100_10", "time")
         if task_id:
             print(f"Data ingested successfully. Task ID: {task_id}")
         else:

@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import math
+import random
+import numpy as np
 
 class LSTM(nn.Module):
     def __init__(self, input_size: int, n_exo_features: int, hidden_size: int, output_size: int, num_layers: int=1):
@@ -49,6 +51,173 @@ class LSTM(nn.Module):
         out = out.view(x.size(0), self.output_size, self.n_endo_features)
         
         return out
+
+# WIP model that would allow for scheduled sampling
+class EncoderLSTM(nn.Module):
+
+    class Encoder(nn.Module):
+        def __init__(self, input_size: int, hidden_size: int, num_layers: int = 1):
+            super().__init__()
+            self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+
+        def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            """
+            Processes the input sequence and returns the final hidden and cell states.
+            """
+            # The outputs of the LSTM are ignored here; we only need the context.
+            _, (hidden, cell) = self.lstm(x)
+            return hidden, cell
+        
+    class Decoder(nn.Module):
+        def __init__(self, input_size: int, hidden_size: int, output_size: int, num_layers: int = 1):
+            super().__init__()
+            # The decoder's input size is all features (endogenous + exogenous)
+            self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+            # The output layer predicts only the endogenous (target) features
+            self.fc = nn.Linear(hidden_size, output_size)
+
+        def forward(self, x_step: torch.Tensor,
+                    hidden: torch.Tensor,
+                    cell: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            """
+            Performs a single decoding step.
+            """
+            # x_step needs to be reshaped to (batch_size, 1, num_features) for the LSTM
+            x_step = x_step.unsqueeze(1)
+
+            # Process one time step
+            output, (hidden, cell) = self.lstm(x_step, (hidden, cell))
+
+            # Pass the LSTM output through the fully connected layer
+            prediction = self.fc(output.squeeze(1))
+
+            return prediction, hidden, cell
+        
+    def __init__(self, input_size: int, n_exo_features: int, hidden_size: int, output_seq_len: int, num_layers: int = 1):
+        super(EncoderLSTM, self).__init__()
+        self.n_endo_features = input_size - n_exo_features
+        self.n_exo_features = n_exo_features
+        self.output_seq_len = output_seq_len
+        
+        # The decoder input includes all features
+        decoder_input_size = self.n_endo_features + self.n_exo_features
+        
+        # The decoder output is just the endogenous (target) features
+        decoder_output_size = self.n_endo_features
+        
+        self.encoder = self.Encoder(input_size, hidden_size, num_layers)
+        self.decoder = self.Decoder(decoder_input_size, hidden_size, decoder_output_size, num_layers)
+
+    def forward(self, src: torch.Tensor, trg: torch.Tensor, teacher_forcing_ratio: float = 0.5) -> torch.Tensor:
+        """
+        The main forward pass that orchestrates the encoder-decoder architecture.
+        
+        Args:
+            src (torch.Tensor): The source/input sequence. Shape: (batch, input_len, features).
+            trg (torch.Tensor): The target sequence. Shape: (batch, output_len, features).
+                                This contains the ground-truth targets and the known future exogenous features.
+            teacher_forcing_ratio (float): The probability of using the ground truth for the next input.
+        """
+        batch_size = src.shape[0]
+        device = src.device
+
+        # A tensor to store the decoder's predictions
+        outputs = torch.zeros(batch_size, self.output_seq_len, self.n_endo_features).to(device)
+
+        # 1. Encode the source sequence to get the context
+        hidden, cell = self.encoder(src)
+
+        # 2. Prepare the first input for the decoder
+        # This will be the last time step of the source sequence
+        decoder_input = src[:, -1, :]
+
+        # 3. Decode step-by-step
+        for t in range(self.output_seq_len):
+            # Generate a prediction for the current time step
+            prediction, hidden, cell = self.decoder(decoder_input, hidden, cell)
+            
+            # Store the prediction
+            outputs[:, t] = prediction
+            
+            # Decide whether to use teacher forcing for the next time step
+            use_teacher_forcing = random.random() < teacher_forcing_ratio
+            
+            if use_teacher_forcing:
+                # Use the ground truth as the next input
+                # We take the known endogenous features from the target tensor 'trg'
+                endo_features = trg[:, t, :self.n_endo_features]
+            else:
+                # Use the model's own prediction as the next endogenous input
+                endo_features = prediction
+            
+            if self.n_exo_features > 0:
+                # We always use the known future exogenous features from the 'trg' tensor
+                exo_features = trg[:, t, self.n_endo_features:]
+                decoder_input = torch.cat([endo_features, exo_features], dim=1)
+            else:
+                decoder_input = endo_features
+                
+        return outputs
+    def forecast(self, src: torch.Tensor, future_exo: torch.Tensor) -> torch.Tensor:
+        """
+        Forecasts future endogenous values given past data and known future exogenous features.
+
+        Args:
+            src (torch.Tensor): Source sequence, shape (batch, input_len, features).
+            future_exo (torch.Tensor): Known future exogenous features,
+                                       shape (batch, output_len, n_exo_features).
+        Returns:
+            torch.Tensor: Forecasted endogenous values,
+                          shape (batch, output_len, n_endo_features).
+        """
+        batch_size = src.shape[0]
+        device = src.device
+
+        outputs = torch.zeros(batch_size, self.output_seq_len, self.n_endo_features, device=device)
+
+        hidden, cell = self.encoder(src)
+        decoder_input = src[:, -1, :]
+
+        for t in range(self.output_seq_len):
+            prediction, hidden, cell = self.decoder(decoder_input, hidden, cell)
+            outputs[:, t] = prediction
+
+            if self.n_exo_features > 0:
+                exo_features = future_exo[:, t, :]
+                decoder_input = torch.cat([prediction, exo_features], dim=1)
+            else:
+                decoder_input = prediction
+
+        return outputs
+
+    def predict(self, src_np: np.ndarray, future_exo_np: np.ndarray | None = None) -> np.ndarray:
+        """
+        NumPy-friendly wrapper for forecast(), matching the eval loop's expectations.
+
+        Args:
+            src_np (np.ndarray): Source sequence, shape (batch, input_len, features).
+            future_exo_np (np.ndarray, optional): Known future exogenous features,
+                                                  shape (batch, output_len, n_exo_features).
+                                                  If None, assumes no exogenous.
+
+        Returns:
+            np.ndarray: Forecasted endogenous values,
+                        shape (batch, output_len, n_endo_features).
+        """
+        device = next(self.parameters()).device
+        src = torch.from_numpy(src_np).float().to(device)
+
+        if self.n_exo_features > 0:
+            if future_exo_np is None:
+                raise ValueError("future_exo_np must be provided when model has exogenous features")
+            future_exo = torch.from_numpy(future_exo_np).float().to(device)
+        else:
+            future_exo = torch.zeros(src.shape[0], self.output_seq_len, 0, device=device)
+
+        with torch.no_grad():
+            preds = self.forecast(src, future_exo)
+        return preds.cpu().numpy()
+
     
 
 class GRU(nn.Module):
