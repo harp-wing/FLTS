@@ -104,16 +104,16 @@ services:
       "
 
   # EDA Service
-  # eda:
-  #   build: ./eda_container
-  #   ports:
-  #     - "8010:8010"
-  #   environment:
-  #     - GATEWAY_URL=http://fastapi-app:8000
-  #   depends_on:
-  #     - fastapi-app
-  #   networks:
-  #     - app-network
+  eda:
+    build: ./eda_container
+    ports:
+      - "8010:8010"
+    environment:
+      - GATEWAY_URL=http://fastapi-app:8000
+    depends_on:
+      - fastapi-app
+    networks:
+      - app-network
 
 
   # Preprocessing Service (Producer)
@@ -127,8 +127,8 @@ services:
       - PRODUCER_TOPIC_0=training-data
       - PRODUCER_TOPIC_1=inference-data
 
-      - SCALER=MinMaxScaler
-      # - ADD_VAL=1e-9
+      - SCALER=MinMaxScaler # MinMaxScaler | StandardScaler | RobustScaler | MaxAbsScaler
+      # - ADD_VAL=1e-9 # Small value to add (use with MinMaxScaler) if a model can't handle values <=0
     depends_on:
       fastapi-app:
         condition: service_started
@@ -159,7 +159,7 @@ services:
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
 
-      - MODEL_TYPE=GRU
+      - MODEL_TYPE=GRU # LSTM | GRU | TCN | TETS
       - TRAIN_TEST_SPLIT=0.8
       - INPUT_SEQ_LEN=10
       - OUTPUT_SEQ_LEN=1
@@ -230,7 +230,7 @@ services:
       - CONSUMER_GROUP_ID=batch-forecasting
       - PRODUCER_TOPIC=performance-eval
 
-      - SAMPLE_IDX=0 # (int) Index of data point from which to begin inference
+      - SAMPLE_IDX=0 # (int) Index of evaluation set from which to begin inference
       - INFERENCE_LENGTH=4070 # (int) Length of the inference sequence
     networks:
       - common
